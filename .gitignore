@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+.vite/
+.DS_Store
+*.log
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Outputs
+outputs/
+logs/
+*.csv
+*.parquet
+!Skills/**/scripts/cli.py  # keep skill CLIs
+
+# HF Space
+.hf/

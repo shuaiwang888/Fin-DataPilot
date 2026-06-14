@@ -1,0 +1,111 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  background: #f5f7fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.fdp-app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.fdp-sidebar {
+  width: 280px;
+  background: #ffffff;
+  border-right: 1px solid #e8e8e8;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.fdp-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fdp-toolbar {
+  height: 56px;
+  border-bottom: 1px solid #e8e8e8;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 12px;
+}
+
+.fdp-chat-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.fdp-input-area {
+  border-top: 1px solid #e8e8e8;
+  background: #ffffff;
+  padding: 12px 24px 16px;
+}
+
+.fdp-thinking {
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.fdp-tool-call {
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.fdp-tool-call.error {
+  background: #fff2f0;
+  border-color: #ffccc7;
+}
+
+.fdp-tool-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.fdp-tool-result-table th,
+.fdp-tool-result-table td {
+  border: 1px solid #e8e8e8;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.fdp-tool-result-table th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.fdp-step-tag {
+  display: inline-block;
+  background: #e6f4ff;
+  color: #1677ff;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 12px;
+  margin-right: 6px;
+}
