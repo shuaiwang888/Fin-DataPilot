@@ -7,6 +7,7 @@ on:
       - "backend/**"
       - "Skills/**"
       - ".github/workflows/deploy-backend-hf.yml"
+      - "deploy-to-hf.sh"
   workflow_dispatch:
 
 jobs:
@@ -15,16 +16,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { lfs: true }
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.HF_SSH_PRIVATE_KEY }}
-      - name: Add HF remote
+
+      # Write the SSH key from secrets to a file, then point git at it directly.
+      # This avoids the webfactory/ssh-agent stdin-loading path that was failing
+      # with "error in libcrypto" on some runners.
+      - name: Install deploy key
+        env:
+          HF_SSH_PRIVATE_KEY: ${{ secrets.HF_SSH_PRIVATE_KEY }}
         run: |
-          git config user.email "ci@findatapilot.local"
-          git config user.name "Fin-DataPilot CI"
-          git remote add hf git@hf.co:spaces/appQQQ/FinDataPilot || true
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Normalise line endings (strip \r) and write the key
+          printf '%s' "$HF_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Show the first and last non-empty line for debugging (no full key dump)
+          head -1 ~/.ssh/deploy_key
+          echo "---"
+          grep -v '^$' ~/.ssh/deploy_key | tail -1
+          # Configure git to use this key + accept new host
+          git config --global core.sshCommand \
+            "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+          echo "✓ deploy key installed"
+
       - name: Deploy
         run: |
+          set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:7}"
           ./deploy-to-hf.sh --message "ci: ${SHORT_SHA}"
