@@ -174,7 +174,7 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
             """Move everything currently safe in `pending` into the appropriate
             buffer and yield think_chunk / token_delta events. Updates
             `pending` in place to keep only the tag-handling tail."""
-            nonlocal final_text, think_text, in_think, last_emit_ts
+            nonlocal final_text, think_text, in_think, last_emit_ts, pending
             changed = True
             while changed:
                 changed = False
