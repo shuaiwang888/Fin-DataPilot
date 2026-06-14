@@ -176,13 +176,35 @@ export function useChatStream() {
               return s;
             });
           } else if (ev.event === "message_final") {
-            // content is already accumulated via token_delta; ensure finalized
-            if (ev.data?.preamble) {
+            // The synthesizer's payload carries the final answer text.
+            // We use it as a SAFETY NET: if the LLM dumped everything
+            // into the think block and never produced token_delta events,
+            // the answer bubble is otherwise empty. Fall back to the
+            // payload's content whenever it's non-empty and the
+            // accumulated content is empty.
+            const finalContent = (ev.data?.content ?? "").trim();
+            const preamble = ev.data?.preamble;
+            if (finalContent) {
               useChatStore.setState((s) => {
                 const m = [...s.messages];
                 const last = m[m.length - 1];
                 if (last && last.role === "assistant") {
-                  m[m.length - 1] = { ...last, preamble: ev.data.preamble };
+                  const currentContent = (last.content ?? "").trim();
+                  if (!currentContent) {
+                    m[m.length - 1] = { ...last, content: finalContent };
+                  }
+                  if (preamble) {
+                    m[m.length - 1] = { ...m[m.length - 1], preamble };
+                  }
+                }
+                return { messages: m };
+              });
+            } else if (preamble) {
+              useChatStore.setState((s) => {
+                const m = [...s.messages];
+                const last = m[m.length - 1];
+                if (last && last.role === "assistant") {
+                  m[m.length - 1] = { ...last, preamble };
                 }
                 return { messages: m };
               });

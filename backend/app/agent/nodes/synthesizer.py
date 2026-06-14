@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, AsyncIterator
 
@@ -95,7 +96,7 @@ HEARTBEAT_INTERVAL = 4.0  # seconds between heartbeat events during long streami
 # If a <think> block keeps growing past this many characters without
 # a closing </think> tag, the LLM likely forgot to close it. Abandon
 # the think block — emit everything as the answer and close the panel.
-MAX_THINK_BLOCK_CHARS = 400
+MAX_THINK_BLOCK_CHARS = 250
 
 
 async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
@@ -252,6 +253,67 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("synthesizer streaming failed")
         yield {"event": "error", "data": {"message": f"总结失败: {exc}"}}
+
+    # Post-process the final answer: extract any <think>...</think> (or
+    # malformed variants like </mm:think>) that the LLM accidentally left
+    # in the answer body, and move them into the thinking stream. This
+    # is a defense-in-depth measure: even if the LLM ignores the
+    # <think>...</think> formatting rule, the answer bubble will not be
+    # polluted with reasoning.
+    extracted_thinks: list[str] = []
+    if final_text:
+        # Accept several malformed tag variants: <think>, <mm:think>, <think>
+        think_re = re.compile(
+            r"<(?:think|memthink|think)\s*>([\s\S]*?)<(?:/think|/memthink|/think)\s*>",
+            re.IGNORECASE,
+        )
+        # Also handle unclosed think blocks (LLM forgot to close) by
+        # taking everything from <think> to the next blank line + header,
+        # OR just stripping any leading <think> to the end of the block.
+        unclosed_re = re.compile(
+            r"<(?:think|memthink|think)\s*>([\s\S]*)",
+            re.IGNORECASE,
+        )
+        for m in think_re.finditer(final_text):
+            content = m.group(1).strip()
+            if content:
+                extracted_thinks.append(content)
+        cleaned = think_re.sub("", final_text)
+        # If still starts with <think>, treat the rest as leaked thinking
+        m = unclosed_re.search(cleaned)
+        if m and cleaned.lstrip().lower().startswith(("<think", "<?think", "<memthink")):
+            leaked = m.group(1).strip()
+            if leaked:
+                extracted_thinks.append(leaked)
+            # Drop everything from the <think> tag onward (it's all thinking)
+            cleaned = cleaned[: m.start()].rstrip() + "\n\n" + cleaned[m.end() :].lstrip() if m.end() < len(cleaned) else cleaned[: m.start()].rstrip()
+        # Strip any leftover standalone <think> / </think> / </mm:think> markers
+        cleaned = re.sub(
+            r"</?(?:think|memthink|think|/think|/memthink|/think|/mn-think|/?think)\s*>",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        # Also strip Qwen-style </mm:think> markers (sometimes appears in newer models)
+        cleaned = re.sub(r"<\/?mn-think\s*>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = cleaned.strip()
+        if cleaned != final_text.strip() or extracted_thinks:
+            final_text = cleaned
+
+    # Emit each extracted think as a think_chunk + think_done so the
+    # frontend renders them in the ThinkingPanel.
+    for txt in extracted_thinks:
+        yield {"event": "think_chunk", "data": {"text": txt}}
+        yield {"event": "think_done", "data": {"text": txt.strip()}}
+
+    # If the LLM dumped everything into a think block and the answer
+    # body is empty, salvage the think text as the answer. The user
+    # would otherwise see a fully-loaded ThinkingPanel and a totally
+    # empty answer bubble — a worse outcome than "show the answer
+    # even if it reads a bit like reasoning."
+    if not final_text.strip() and think_text.strip():
+        final_text = think_text.strip()
+        think_text = ""
 
     if not final_text and calls:
         last = calls[-1]
