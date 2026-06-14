@@ -25,4 +25,6 @@ jobs:
           git config user.name "Fin-DataPilot CI"
           git remote add hf git@hf.co:spaces/appQQQ/FinDataPilot || true
       - name: Deploy
-        run: ./deploy-to-hf.sh --message "ci: ${GITHUB_SHA::7}"
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          ./deploy-to-hf.sh --message "ci: ${SHORT_SHA}"
