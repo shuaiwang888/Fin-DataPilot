@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useChatStore } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { streamChat } from "../lib/sse";
@@ -10,23 +10,33 @@ export function useChatStream() {
   const chat = useChatStore();
   const sessions = useSessionStore();
 
+  // Holds the in-flight AbortController so the user can cancel the
+  // current stream (the AntD X <Sender> "stop" button calls
+  // stop(), which aborts the fetch, which the parser then surfaces
+  // as a thrown DOMException we catch and treat as "user stopped").
+  const abortRef = useRef<AbortController | null>(null);
+
   const send = useCallback(
     async (query: string) => {
       if (!query.trim() || chat.streaming) return;
       chat.appendUser(query);
       chat.appendAssistant();
 
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       const url = `${API_BASE}/api/agent/chat/stream`;
       let newSessionId: string | null = null;
       try {
-        for await (const ev of streamChat(url, {
-          query,
-          session_id: chat.sessionId,
-        })) {
+        for await (const ev of streamChat(
+          url,
+          { query, session_id: chat.sessionId },
+          controller.signal,
+        )) {
           if (ev.event === "session") {
             newSessionId = ev.data.session_id;
             // Server just minted a new session — keep the optimistic UI
-            // bubbles we already rendered (user + assistant). Only update
+            // bubbles (user + assistant) we already rendered. Only update
             // the sessionId reference, don't wipe messages.
             chat.setSession(newSessionId, { clearMessages: false });
             sessions.setActive(newSessionId);
@@ -218,19 +228,51 @@ export function useChatStream() {
           }
         }
       } catch (err) {
-        // Network errors (connection drop, HF proxy timeout) are often
-        // transient. Show a friendly message + offer a one-click retry
-        // by re-sending the same query.
-        const msg = (err as Error)?.message ?? "出错了";
-        const friendly = /network|fetch|aborted|timeout/i.test(msg)
-          ? "网络连接中断（HF Space 代理超时）。请重试，或检查后端是否还在运行。"
-          : `⚠️ ${msg}`;
-        chat.appendToken(`\n\n${friendly}\n\n如需重试，请直接重新发送上一条问题。`);
-        chat.finalizeAssistant();
+        const e = err as Error & { name?: string };
+        if (e.name === "AbortError" || controller.signal.aborted) {
+          // User pressed stop. Don't show the "network error" message;
+          // just finalize the partial answer with a "已停止" marker.
+          useChatStore.setState((s) => {
+            const m = [...s.messages];
+            const last = m[m.length - 1];
+            if (last && last.role === "assistant" && last.streaming) {
+              const sep = last.content ? "\n\n" : "";
+              m[m.length - 1] = {
+                ...last,
+                content: (last.content ?? "") + `${sep}⏹ 已停止生成。`,
+                streaming: false,
+              };
+            }
+            return {
+              messages: m,
+              pendingText: "",
+              streaming: false,
+              answerStarted: false,
+            };
+          });
+        } else {
+          // Network errors (connection drop, HF proxy timeout) are often
+          // transient. Show a friendly message + offer a one-click retry
+          // by re-sending the same query.
+          const msg = e?.message ?? "出错了";
+          const friendly = /network|fetch|aborted|timeout/i.test(msg)
+            ? "网络连接中断（HF Space 代理超时）。请重试，或检查后端是否还在运行。"
+            : `⚠️ ${msg}`;
+          chat.appendToken(`\n\n${friendly}\n\n如需重试，请直接重新发送上一条问题。`);
+          chat.finalizeAssistant();
+        }
+      } finally {
+        abortRef.current = null;
       }
     },
     [chat, sessions]
   );
 
-  return { send, streaming: chat.streaming };
+  const stop = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+  }, []);
+
+  return { send, stop, streaming: chat.streaming };
 }

@@ -14,7 +14,28 @@ export function Sidebar() {
   const [editingTitle, setEditingTitle] = useState("");
 
   useEffect(() => {
-    api.listSessions().then((r) => sessions.setSessions(r.sessions)).catch(() => {});
+    (async () => {
+      try {
+        const r = await api.listSessions();
+        sessions.setSessions(r.sessions);
+        // On page load, if the user has past conversations, auto-select
+        // the most recent one and load its messages so the page
+        // refresh doesn't wipe their history.
+        if (r.sessions.length > 0 && !sessions.activeId && !chat.sessionId) {
+          const mostRecent = r.sessions[0];
+          sessions.setActive(mostRecent.id);
+          chat.setSession(mostRecent.id);
+          try {
+            const detail = await api.getSession(mostRecent.id);
+            chat.setMessages(detail.messages);
+          } catch {
+            /* non-fatal */
+          }
+        }
+      } catch {
+        /* offline / not yet deployed; ignore */
+      }
+    })();
   }, []);
 
   const handleNew = async () => {

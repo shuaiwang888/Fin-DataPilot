@@ -8,7 +8,7 @@ interface Props {
 
 export function MessageInput({ disabled }: Props) {
   const [value, setValue] = useState("");
-  const { send, streaming } = useChatStream();
+  const { send, stop, streaming } = useChatStream();
 
   const handleSubmit = (next: string) => {
     const q = next.trim();
@@ -23,7 +23,10 @@ export function MessageInput({ disabled }: Props) {
         value={value}
         onChange={setValue}
         onSubmit={handleSubmit}
-        onCancel={() => {}}
+        // While streaming, AntD X's <Sender> shows a built-in
+        // "stop" button. Hook it to the AbortController-backed stop()
+        // from the chat hook.
+        onCancel={streaming ? stop : undefined}
         placeholder="输入金融问题，例如：贵州茅台 PE、银行 股息率前 10..."
         loading={streaming}
         disabled={disabled}
