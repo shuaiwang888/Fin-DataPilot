@@ -86,8 +86,24 @@ export function SkillManagerDrawer() {
                   ))}
                 </div>
                 {s.spec.requires.length > 0 && (
-                  <div style={{ fontSize: 12, color: "#cf1322", marginBottom: 8 }}>
-                    需要环境变量: {s.spec.requires.join(", ")}
+                  <div style={{ fontSize: 12, marginBottom: 8 }}>
+                    {(() => {
+                      const missing = s.spec.requires.filter(
+                        (e) => s.requirements_met?.[e] === false
+                      );
+                      if (missing.length === 0) {
+                        return (
+                          <span style={{ color: "#52c41a" }}>
+                            ✓ 环境变量已配置 ({s.spec.requires.join(", ")})
+                          </span>
+                        );
+                      }
+                      return (
+                        <span style={{ color: "#cf1322" }}>
+                          ✗ 需要环境变量: {missing.join(", ")}
+                        </span>
+                      );
+                    })()}
                   </div>
                 )}
                 {s.enabled && (

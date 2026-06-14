@@ -20,6 +20,7 @@ export interface ToolSpec {
 export interface SkillItem {
   spec: ToolSpec;
   enabled: boolean;
+  requirements_met?: Record<string, boolean>;
 }
 
 export interface Session {
