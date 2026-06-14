@@ -139,8 +139,22 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
                     if event_name == "message_final":
                         final_text = event_data.get("content", "")
                 elif tick_wait in done:
-                    # Keep-alive tick: emit a no-op SSE comment
+                    # Keep-alive tick: emit a no-op SSE comment AND a
+                    # proper `event: heartbeat` so the frontend's
+                    # heartbeat handler fires (it adds a "💭 思考中…"
+                    # placeholder, which is critical when the LLM is
+                    # taking 20-30s and the synthesizer is idle waiting
+                    # for the first chunk).
                     yield _sse_keepalive()
+                    yield _sse(
+                        "heartbeat",
+                        {
+                            "ts": time.time(),
+                            "in_think": True,
+                            "pending_chars": 0,
+                            "source": "endpoint_keepalive",
+                        },
+                    )
                 # else: just a disconnect-check tick; loop again
         except Exception as exc:  # noqa: BLE001
             logger.exception("stream failed")
