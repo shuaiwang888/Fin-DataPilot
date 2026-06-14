@@ -96,7 +96,7 @@ HEARTBEAT_INTERVAL = 4.0  # seconds between heartbeat events during long streami
 # If a <think> block keeps growing past this many characters without
 # a closing </think> tag, the LLM likely forgot to close it. Abandon
 # the think block — emit everything as the answer and close the panel.
-MAX_THINK_BLOCK_CHARS = 250
+MAX_THINK_BLOCK_CHARS = 200
 
 
 async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
@@ -220,15 +220,27 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
                 continue
             pending += delta
             last_event_ts = time.monotonic()
-            # Emit a heartbeat opportunistically on every chunk arrival so
-            # the frontend sees regular ticks even when no text changes hands.
+            # Heartbeat + force-flush any pending text every HEARTBEAT_INTERVAL
+            # seconds. Critical: even tiny pending chunks (< MAX_PENDING_TAIL)
+            # must be flushed, otherwise the user sees "still thinking" with
+            # zero text in either panel for chunks that arrive faster than
+            # 4s but smaller than 12 chars.
             if time.monotonic() - last_emit_ts >= HEARTBEAT_INTERVAL:
+                # Force-flush whatever is in `pending` (regardless of size)
+                if pending:
+                    if in_think:
+                        think_text += pending
+                        yield {"event": "think_chunk", "data": {"text": pending}}
+                    else:
+                        final_text += pending
+                        yield {"event": "token_delta", "data": {"text": pending}}
+                    pending = ""
                 yield {
                     "event": "heartbeat",
                     "data": {
                         "ts": time.time(),
                         "in_think": in_think,
-                        "pending_chars": len(pending),
+                        "pending_chars": 0,
                     },
                 }
                 last_emit_ts = time.monotonic()
