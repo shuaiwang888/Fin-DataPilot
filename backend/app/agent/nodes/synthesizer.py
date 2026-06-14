@@ -241,13 +241,21 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
                 continue
             pending += delta
             last_event_ts = time.monotonic()
-            # Heartbeat + force-flush any pending text every HEARTBEAT_INTERVAL
-            # seconds. Critical: even tiny pending chunks (< MAX_PENDING_TAIL)
-            # must be flushed, otherwise the user sees "still thinking" with
-            # zero text in either panel for chunks that arrive faster than
-            # 4s but smaller than 12 chars.
+            # Critical: always run emit_pending FIRST so that <think>/</think>
+            # tag boundaries are processed as soon as they appear in the
+            # stream. Without this, if the LLM streams small chunks
+            # (each < MAX_PENDING_TAIL chars and < HEARTBEAT_INTERVAL apart),
+            # the tag-handling loop never runs, pending grows, and the
+            # raw <think>...</think> text ends up dumped into the answer
+            # bubble as token_delta — exactly the bug we're fixing.
+            async for ev in emit_pending(False):
+                yield ev
+            # Heartbeat only fires if the LLM is genuinely idle (no
+            # chunk arrivals for HEARTBEAT_INTERVAL). At that point we
+            # force-flush anything still in `pending` so the user sees
+            # live progress, and run emit_pending again afterward in
+            # case the previous pass didn't catch the close tag.
             if time.monotonic() - last_emit_ts >= HEARTBEAT_INTERVAL:
-                # Force-flush whatever is in `pending` (regardless of size)
                 if pending:
                     if in_think:
                         think_text += pending
@@ -265,14 +273,16 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
                     },
                 }
                 last_emit_ts = time.monotonic()
-            async for ev in emit_pending(False):
-                yield ev
+                async for ev in emit_pending(False):
+                    yield ev
 
-        # End of stream — flush EVERYTHING that's still in `pending`.
-        # No more tag-greed: if `</think>` never came, treat everything
-        # since the last <think> as a single think block (so the user
-        # at least sees the reasoning, even if it's "raw"). Better to
-        # show garbled text than to silently drop it.
+        # End of stream — FIRST run emit_pending to process any
+        # <think>/</think> boundaries the LLM left in pending, THEN
+        # dump the truly-untagged tail. This is the critical fix:
+        # without the emit_pending() call here, the raw <think>...</think>
+        # text would land in the answer bubble.
+        async for ev in emit_pending(False):
+            yield ev
         if pending:
             if in_think:
                 think_text += pending
