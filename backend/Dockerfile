@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code
 COPY app ./app
-COPY tests ./tests
 
 # Data + log dirs (HF Spaces can persist /data across rebuilds)
 RUN mkdir -p /data/outputs /data/logs
