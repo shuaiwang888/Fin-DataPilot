@@ -196,7 +196,14 @@ export function useChatStream() {
           }
         }
       } catch (err) {
-        chat.appendToken(`\n\n⚠️ ${(err as Error).message}`);
+        // Network errors (connection drop, HF proxy timeout) are often
+        // transient. Show a friendly message + offer a one-click retry
+        // by re-sending the same query.
+        const msg = (err as Error)?.message ?? "出错了";
+        const friendly = /network|fetch|aborted|timeout/i.test(msg)
+          ? "网络连接中断（HF Space 代理超时）。请重试，或检查后端是否还在运行。"
+          : `⚠️ ${msg}`;
+        chat.appendToken(`\n\n${friendly}\n\n如需重试，请直接重新发送上一条问题。`);
         chat.finalizeAssistant();
       }
     },
