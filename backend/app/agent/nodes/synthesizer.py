@@ -3,17 +3,20 @@
 Output protocol:
   - preamble: structured info about the skill call (chunks_info, code_count, ...)
   - summary_start: signals that the LLM stream is about to begin
-  - token_delta: each LLM token chunk (the raw text; the frontend parses <think>)
-  - think_chunk: optional, when the LLM output spans a <think> block boundary we
-    emit a `think_chunk` event with the reasoning text so the frontend can render
-    it inside the ThinkingPanel
-  - message_final: final structured payload for persistence
+  - think_chunk: reasoning text (inside <think>...</think>)
+  - think_done: signals the end of a <think> block
+  - token_delta: user-facing answer tokens
+  - heartbeat: periodic tick during long LLM thinking (every ~5s) so the
+    frontend can render a "💭 思考中…" indicator instead of looking dead
+  - message_final: final structured payload
   - error: LLM call failed
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from typing import Any, AsyncIterator
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -27,12 +30,29 @@ logger = logging.getLogger(__name__)
 
 SYNTH_PROMPT = """你是 Fin-DataPilot 的总结器。基于以下 Skill 调用结果，用清晰、自然的中文输出最终答案。
 
-# 输出格式
-- 第一行：用 `<think>...</think>` 包裹你的**思考过程**（用户看不到，但会被记录到 thinking 面板里）。思考内容应简短（≤ 100 字），说明你打算如何组织答案、关注哪些关键字段。
-- 第二行开始：正式的**最终答案**，面向用户。
+# 严格输出格式（请务必遵守）
+**你的回复必须严格分为两部分，用下面的标签包裹**：
+
+1. **第一部分：思考过程**（包裹在 `<think>` 和 `</think>` 之间，用户看不到，但平台会记录到 thinking 面板）
+   - 必须以 `<think>` 开头
+   - 必须以 `</think>` 结尾
+   - 内容应简短（≤ 100 字），说明你打算如何组织答案、关注哪些关键字段
+   - 思考结束**必须**有 `</think>` 关闭标签
+
+2. **第二部分：最终答案**（`</think>` 之后的所有内容）
+   - 面向用户，使用清晰中文
+   - 必要时用 Markdown 表格
+   - 不要重复粘贴全部原始 JSON
+
+# 错误示例（避免）
+✗ 不要把 `<think>` 内容混在最终答案里
+✗ 不要省略 `</think>` 关闭标签
+✗ 不要在思考过程之后再写第二个 `<think>` 块
+
+# 正确示例
+✓ `<think>用户问的是贵州茅台的 PE，我需要从返回数据中提取 PE 字段并整理。</think>贵州茅台（600519.SH）的市盈率（PE-TTM）为 ...`
 
 # 内容要求
-- 不要重复粘贴全部原始 JSON；挑选最关键的字段，必要时用 Markdown 表格。
 - 涉及数据时不要附加"数据来源"字样，平台会统一处理。
 - 询问的条件 / 问句 / 数据量等信息平台会自动显示在答案顶部，**不要**再在答案中重复。
 - 如果所有 Skill 都失败了，礼貌说明并建议换个问法。
@@ -40,11 +60,7 @@ SYNTH_PROMPT = """你是 Fin-DataPilot 的总结器。基于以下 Skill 调用�
 
 
 def _extract_preamble(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Build a structured preamble from the most recent successful tool call.
-
-    Includes the actual `args.query` we sent, the parsed `chunks_info` returned
-    by the upstream iWencai gateway, and the total / returned row counts.
-    """
+    """Build a structured preamble from the most recent successful tool call."""
     for c in reversed(calls or []):
         if not c.get("ok"):
             continue
@@ -52,7 +68,7 @@ def _extract_preamble(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
         data = result.get("data") or {}
         if not isinstance(data, dict):
             continue
-        rows = data.get("datas") or []
+        rows = data.get("articles") or data.get("announcements") or data.get("reports") or data.get("datas") or []
         code_count = data.get("code_count", 0)
         chunks_info = data.get("chunks_info")
         if isinstance(chunks_info, str):
@@ -71,6 +87,11 @@ def _extract_preamble(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
             "chunks_info": chunks_info,
         }
     return None
+
+
+# Tunables
+MAX_PENDING_TAIL = 12  # chars kept back looking for a partial <think>/</think>
+HEARTBEAT_INTERVAL = 4.0  # seconds between heartbeat events during long streaming
 
 
 async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
@@ -103,9 +124,110 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
     final_text = ""
     think_text = ""
     in_think = False
-    pending = ""  # carry-over for partial tag matches
+    pending = ""
+
+    # Heartbeat task: emits a tick every HEARTBEAT_INTERVAL seconds while we're
+    # waiting on the LLM, so the frontend can show a "💭 thinking..." state.
+    heartbeat_stop = asyncio.Event()
+    last_event_ts = time.monotonic()
+
+    async def _heartbeat() -> None:
+        nonlocal last_event_ts
+        try:
+            while not heartbeat_stop.is_set():
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                if time.monotonic() - last_event_ts >= HEARTBEAT_INTERVAL:
+                    yield_ = {
+                        "event": "heartbeat",
+                        "data": {
+                            "ts": time.time(),
+                            "in_think": in_think,
+                            "pending_chars": len(pending),
+                        },
+                    }
+                    last_event_ts = time.monotonic()
+                    # We can't yield from here — push into a queue instead
+                    # by abusing the closure: just record the tick, the
+                    # main loop will emit it on the next safe boundary.
+        except asyncio.CancelledError:
+            return
+
+    hb_task = asyncio.create_task(_heartbeat())
+
+    def _flush_text(s: str) -> None:
+        """Helper: emit a chunk of text in the right bucket."""
+        nonlocal final_text, think_text, in_think
+        if not s:
+            return
+        last_event_ts = time.monotonic()
+        if in_think:
+            think_text += s
+            # The actual yield happens in the main loop after this returns;
+            # we stash in think_text buffer.
+        else:
+            final_text += s
 
     try:
+        last_emit_ts = time.monotonic()
+
+        async def emit_pending(to_think: bool) -> None:
+            """Move everything currently safe in `pending` into the appropriate
+            buffer and yield think_chunk / token_delta events. Updates
+            `pending` in place to keep only the tag-handling tail."""
+            nonlocal final_text, think_text, in_think, last_emit_ts
+            changed = True
+            while changed:
+                changed = False
+                if in_think:
+                    end_idx = pending.find("</think>")
+                    if end_idx >= 0:
+                        emit = pending[:end_idx]
+                        if emit:
+                            think_text += emit
+                            yield {"event": "think_chunk", "data": {"text": emit}}
+                        pending = pending[end_idx + len("</think>"):]
+                        yield {
+                            "event": "think_done",
+                            "data": {"text": think_text.strip()},
+                        }
+                        think_text = ""
+                        in_think = False
+                        changed = True
+                        last_emit_ts = time.monotonic()
+                    else:
+                        # Keep last 12 chars looking for the closing tag,
+                        # but flush anything larger every heartbeat to
+                        # avoid starving the UI.
+                        if len(pending) > MAX_PENDING_TAIL and (
+                            time.monotonic() - last_emit_ts >= HEARTBEAT_INTERVAL
+                        ):
+                            emit = pending[:-MAX_PENDING_TAIL]
+                            think_text += emit
+                            yield {"event": "think_chunk", "data": {"text": emit}}
+                            pending = pending[-MAX_PENDING_TAIL:]
+                            last_emit_ts = time.monotonic()
+                else:
+                    start_idx = pending.find("<think>")
+                    if start_idx >= 0:
+                        if start_idx > 0:
+                            emit = pending[:start_idx]
+                            final_text += emit
+                            yield {"event": "token_delta", "data": {"text": emit}}
+                            last_emit_ts = time.monotonic()
+                        pending = pending[start_idx + len("<think>"):]
+                        in_think = True
+                        think_text = ""
+                        changed = True
+                    else:
+                        if len(pending) > MAX_PENDING_TAIL and (
+                            time.monotonic() - last_emit_ts >= HEARTBEAT_INTERVAL
+                        ):
+                            emit = pending[:-MAX_PENDING_TAIL]
+                            final_text += emit
+                            yield {"event": "token_delta", "data": {"text": emit}}
+                            pending = pending[-MAX_PENDING_TAIL:]
+                            last_emit_ts = time.monotonic()
+
         async for chunk in llm.astream(
             [SystemMessage(content=SYNTH_PROMPT), HumanMessage(content=user_prompt)]
         ):
@@ -113,50 +235,27 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
             if not isinstance(delta, str) or not delta:
                 continue
             pending += delta
+            last_event_ts = time.monotonic()
+            # Emit a heartbeat opportunistically on every chunk arrival so
+            # the frontend sees regular ticks even when no text changes hands.
+            if time.monotonic() - last_emit_ts >= HEARTBEAT_INTERVAL:
+                yield {
+                    "event": "heartbeat",
+                    "data": {
+                        "ts": time.time(),
+                        "in_think": in_think,
+                        "pending_chars": len(pending),
+                    },
+                }
+                last_emit_ts = time.monotonic()
+            async for ev in emit_pending(False):
+                yield ev
 
-            # Drain pending, splitting on <think> / </think> boundaries.
-            # We may have a partial tag at the end (kept for the next chunk).
-            while pending:
-                if in_think:
-                    end_idx = pending.find("</think>")
-                    if end_idx == -1:
-                        # Keep the last 7 chars in case </think> is split across chunks
-                        if len(pending) > 8:
-                            emit = pending[:-8]
-                            think_text += emit
-                            yield {"event": "think_chunk", "data": {"text": emit}}
-                            pending = pending[-8:]
-                        break
-                    emit = pending[:end_idx]
-                    if emit:
-                        think_text += emit
-                        yield {"event": "think_chunk", "data": {"text": emit}}
-                    pending = pending[end_idx + len("</think>"):]
-                    # Emit a single consolidated think block
-                    yield {
-                        "event": "think_done",
-                        "data": {"text": think_text.strip()},
-                    }
-                    think_text = ""
-                    in_think = False
-                else:
-                    start_idx = pending.find("<think>")
-                    if start_idx == -1:
-                        # Keep the last 7 chars in case <think> is split across chunks
-                        if len(pending) > 7:
-                            emit = pending[:-7]
-                            final_text += emit
-                            yield {"event": "token_delta", "data": {"text": emit}}
-                            pending = pending[-7:]
-                        break
-                    if start_idx > 0:
-                        emit = pending[:start_idx]
-                        final_text += emit
-                        yield {"event": "token_delta", "data": {"text": emit}}
-                    pending = pending[start_idx + len("<think>"):]
-                    in_think = True
-                    think_text = ""
-        # Flush any remaining pending
+        # End of stream — flush EVERYTHING that's still in `pending`.
+        # No more tag-greed: if `</think>` never came, treat everything
+        # since the last <think> as a single think block (so the user
+        # at least sees the reasoning, even if it's "raw"). Better to
+        # show garbled text than to silently drop it.
         if pending:
             if in_think:
                 think_text += pending
@@ -165,12 +264,17 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
                 final_text += pending
                 yield {"event": "token_delta", "data": {"text": pending}}
             pending = ""
-        # If we ended mid-think, emit a final consolidated block
         if in_think and think_text.strip():
             yield {"event": "think_done", "data": {"text": think_text.strip()}}
     except Exception as exc:  # noqa: BLE001
         logger.exception("synthesizer streaming failed")
         yield {"event": "error", "data": {"message": f"总结失败: {exc}"}}
+    finally:
+        heartbeat_stop.set()
+        try:
+            await asyncio.wait_for(hb_task, timeout=0.5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            hb_task.cancel()
 
     if not final_text and calls:
         last = calls[-1]

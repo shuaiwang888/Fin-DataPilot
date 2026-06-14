@@ -73,6 +73,7 @@ export type AgentEvent =
   | { event: "token_delta"; data: { text: string } }
   | { event: "think_chunk"; data: { text: string } }
   | { event: "think_done"; data: { text: string } }
+  | { event: "heartbeat"; data: { ts: number; in_think: boolean; pending_chars: number } }
   | {
       event: "message_final";
       data: { content: string; tool_calls: unknown[]; preamble?: AnswerPreamble };

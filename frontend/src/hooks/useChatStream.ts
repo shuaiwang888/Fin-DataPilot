@@ -92,38 +92,88 @@ export function useChatStream() {
           } else if (ev.event === "token_delta") {
             chat.appendToken(ev.data.text ?? "");
           } else if (ev.event === "think_chunk") {
-            // Streaming sub-chunk inside a <think> block — buffer it client-side
-            // until the matching think_done event arrives, so the thinking
-            // panel renders a single coherent entry rather than a flood of
-            // tiny fragments.
+            // Stream the thinking into a single live-updated step so the
+            // user sees the reasoning appear in real time. We tag the step
+            // id with a constant prefix so we can find & update it on
+            // every chunk instead of appending a new step each time.
             useChatStore.setState((s) => {
-              const w = s as unknown as { _pendingThink?: string };
+              const w = s as unknown as {
+                _pendingThink?: string;
+                _liveThinkId?: string;
+              };
               w._pendingThink = (w._pendingThink ?? "") + (ev.data.text ?? "");
-              return s;
-            });
-          } else if (ev.event === "think_done") {
-            useChatStore.setState((s) => {
-              const w = s as unknown as { _pendingThink?: string };
-              const buffered = w._pendingThink ?? ev.data.text ?? "";
-              w._pendingThink = "";
-              if (!buffered.trim()) return s;
               const m = [...s.messages];
               const last = m[m.length - 1];
               if (last && last.role === "assistant") {
+                const existingId = w._liveThinkId;
+                const live = (last.thinking ?? []).map((t) =>
+                  t.id === existingId
+                    ? { ...t, text: w._pendingThink ?? "" }
+                    : t
+                );
+                if (existingId && live.some((t) => t.id === existingId)) {
+                  m[m.length - 1] = { ...last, thinking: live };
+                } else {
+                  const id = `t_live_${Date.now()}`;
+                  w._liveThinkId = id;
+                  m[m.length - 1] = {
+                    ...last,
+                    thinking: [
+                      ...(last.thinking ?? []),
+                      { id, step: "synth_reason", text: w._pendingThink ?? "", ts: Date.now() },
+                    ],
+                  };
+                }
+              }
+              return { messages: m };
+            });
+          } else if (ev.event === "think_done") {
+            useChatStore.setState((s) => {
+              const w = s as unknown as {
+                _pendingThink?: string;
+                _liveThinkId?: string;
+              };
+              w._pendingThink = "";
+              w._liveThinkId = undefined;
+              return s;
+            });
+          } else if (ev.event === "heartbeat") {
+            // Server is still generating — keep the live thinking step
+            // visible (or add a placeholder so the UI shows a spinner).
+            useChatStore.setState((s) => {
+              const w = s as unknown as {
+                _pendingThink?: string;
+                _liveThinkId?: string;
+                _lastHeartbeatAt?: number;
+              };
+              w._lastHeartbeatAt = Date.now();
+              if (w._pendingThink) return s; // already showing live text
+              const m = [...s.messages];
+              const last = m[m.length - 1];
+              if (last && last.role === "assistant") {
+                const liveId = w._liveThinkId;
+                if (liveId && (last.thinking ?? []).some((t) => t.id === liveId)) {
+                  return s; // already a placeholder
+                }
+                const id = `t_live_${Date.now()}`;
+                w._liveThinkId = id;
                 m[m.length - 1] = {
                   ...last,
                   thinking: [
                     ...(last.thinking ?? []),
-                    {
-                      id: `t_${Date.now()}_${Math.random()}`,
-                      step: "synth_reason",
-                      text: buffered,
-                      ts: Date.now(),
-                    },
+                    { id, step: "synth_reason", text: "💭 思考中…", ts: Date.now() },
                   ],
                 };
               }
               return { messages: m };
+            });
+          } else if (ev.event === "summary_start") {
+            // Reset thinking buffer for the new run
+            useChatStore.setState((s) => {
+              const w = s as unknown as { _pendingThink?: string; _liveThinkId?: string };
+              w._pendingThink = "";
+              w._liveThinkId = undefined;
+              return s;
             });
           } else if (ev.event === "message_final") {
             // content is already accumulated via token_delta; ensure finalized
