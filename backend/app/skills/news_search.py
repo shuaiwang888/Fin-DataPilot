@@ -63,12 +63,31 @@ async def news_search_handler(
             tool=SKILL_LOCAL_NAME, ok=False, error=f"{type(exc).__name__}: {exc}", trace_id=trace_id
         )
 
-    articles = body.get("articles") or body.get("datas") or body.get("results") or []
+    # The iWencai /v1/comprehensive/search endpoint returns
+    #   { "status_code": 0, "status_msg": "OK", "data": [ {...}, ... ] }
+    # i.e. the array lives under `data`, not `articles` / `datas` / `results`.
+    # We also pass the whole body through (minus a couple of housekeeping fields)
+    # so the synthesizer / frontend can read `status_msg`, `chunks_info`, etc.
+    status_code = body.get("status_code", -1) if isinstance(body, dict) else -1
+    if resp.status_code != 200 or status_code != 0:
+        return ToolResult(
+            tool=SKILL_LOCAL_NAME,
+            ok=False,
+            error=f"iWencai API error (HTTP {resp.status_code}, status {status_code}): {body.get('status_msg', '')}",
+            data=body,
+            trace_id=trace_id,
+        )
+
+    articles = body.get("data") or []
     return ToolResult(
         tool=SKILL_LOCAL_NAME,
         ok=True,
-        data={"articles": articles, "count": len(articles)},
-        meta={"raw_status": resp.status_code},
+        data={
+            "articles": articles,
+            "count": len(articles),
+            "status_msg": body.get("status_msg", ""),
+        },
+        meta={"raw_status": resp.status_code, "returned": len(articles)},
         trace_id=trace_id,
     )
 

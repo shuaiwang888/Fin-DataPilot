@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 SKILL_LOCAL_NAME = "report-search"
 SKILL_PLATFORM_NAME = "report-search"
-SKILL_VERSION = "1.0.0"
+SKILL_VERSION = "2.0.0"
 DEFAULT_API_URL = "https://openapi.iwencai.com/v1/comprehensive/search"
 
 
@@ -62,12 +62,27 @@ async def report_search_handler(
             tool=SKILL_LOCAL_NAME, ok=False, error=f"{type(exc).__name__}: {exc}", trace_id=trace_id
         )
 
-    items = body.get("reports") or body.get("datas") or body.get("results") or []
+    # iWencai /v1/comprehensive/search: array under `data` (not `reports`/`datas`/`results`).
+    status_code = body.get("status_code", -1) if isinstance(body, dict) else -1
+    if resp.status_code != 200 or status_code != 0:
+        return ToolResult(
+            tool=SKILL_LOCAL_NAME,
+            ok=False,
+            error=f"iWencai API error (HTTP {resp.status_code}, status {status_code}): {body.get('status_msg', '')}",
+            data=body,
+            trace_id=trace_id,
+        )
+
+    items = body.get("data") or []
     return ToolResult(
         tool=SKILL_LOCAL_NAME,
         ok=True,
-        data={"reports": items, "count": len(items)},
-        meta={"raw_status": resp.status_code},
+        data={
+            "reports": items,
+            "count": len(items),
+            "status_msg": body.get("status_msg", ""),
+        },
+        meta={"raw_status": resp.status_code, "returned": len(items)},
         trace_id=trace_id,
     )
 

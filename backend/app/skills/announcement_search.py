@@ -64,12 +64,27 @@ async def announcement_search_handler(
             tool=SKILL_LOCAL_NAME, ok=False, error=f"{type(exc).__name__}: {exc}", trace_id=trace_id
         )
 
-    items = body.get("announcements") or body.get("datas") or body.get("results") or []
+    # iWencai /v1/comprehensive/search: array under `data` (not `announcements`/`datas`/`results`).
+    status_code = body.get("status_code", -1) if isinstance(body, dict) else -1
+    if resp.status_code != 200 or status_code != 0:
+        return ToolResult(
+            tool=SKILL_LOCAL_NAME,
+            ok=False,
+            error=f"iWencai API error (HTTP {resp.status_code}, status {status_code}): {body.get('status_msg', '')}",
+            data=body,
+            trace_id=trace_id,
+        )
+
+    items = body.get("data") or []
     return ToolResult(
         tool=SKILL_LOCAL_NAME,
         ok=True,
-        data={"announcements": items, "count": len(items)},
-        meta={"raw_status": resp.status_code},
+        data={
+            "announcements": items,
+            "count": len(items),
+            "status_msg": body.get("status_msg", ""),
+        },
+        meta={"raw_status": resp.status_code, "returned": len(items)},
         trace_id=trace_id,
     )
 
