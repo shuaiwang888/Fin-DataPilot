@@ -1,4 +1,7 @@
-"""Fin-DataPilot FastAPI application entrypoint."""
+"""Fin-DataPilot FastAPI application entrypoint.
+
+Triggered by the user adding HF_SSH_PRIVATE_KEY to GitHub Secrets.
+"""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
