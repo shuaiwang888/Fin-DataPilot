@@ -27,7 +27,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
       - name: Install
-        run: pnpm install --frozen-lockfile
+        # --allow-build=esbuild explicitly permits esbuild's postinstall script
+        # to run on a fresh CI runner. pnpm 9+ blocks all postinstalls by default.
+        run: pnpm install --frozen-lockfile --allow-build=esbuild
         working-directory: frontend
       - name: Build
         run: pnpm build
