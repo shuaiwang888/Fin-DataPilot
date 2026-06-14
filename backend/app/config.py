@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     turso_auth_token: str = ""
     local_sqlite_path: str = "./data/findatapilot.db"
 
+    # ===== Session retention =====
+    # Per-user cap on stored sessions. When a new session is created
+    # and the user already has this many, the OLDEST session (by
+    # created_at) is deleted to make room. Set to 0 to disable.
+    max_sessions_per_user: int = 50
+
     # ===== Agent =====
     agent_max_reflect_rounds: int = 5
     agent_max_parallel_skills: int = 3

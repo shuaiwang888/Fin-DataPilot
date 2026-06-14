@@ -1,14 +1,18 @@
 """Repository functions over the storage models. Pure async + SQLAlchemy 2.0 style."""
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.storage.db import SessionLocal
 from app.storage.models import Message, Session, SkillPref, ToolRun
+
+logger = logging.getLogger(__name__)
 
 
 def _new_id() -> str:
@@ -17,11 +21,41 @@ def _new_id() -> str:
 
 # ---------- sessions ----------
 
+async def _prune_old_sessions(db: AsyncSession, user_id: str) -> int:
+    """If the user has more than `max_sessions_per_user` sessions,
+    delete the oldest by `created_at` until the count is at most
+    that limit. Returns the number deleted. Messages cascade.
+
+    `max_sessions_per_user == 0` disables the cap.
+    """
+    cap = get_settings().max_sessions_per_user
+    if cap <= 0:
+        return 0
+    result = await db.execute(
+        select(Session)
+        .where(Session.user_id == user_id)
+        .order_by(Session.created_at.desc())
+    )
+    rows = result.scalars().all()
+    if len(rows) <= cap:
+        return 0
+    excess = [r.id for r in rows[cap:]]
+    from sqlalchemy import delete
+
+    await db.execute(delete(Session).where(Session.id.in_(excess)))
+    return len(excess)
+
+
 async def create_session_async(title: str, user_id: str) -> str:
     sid = _new_id()
     async with SessionLocal() as db:
         db.add(Session(id=sid, title=title, user_id=user_id))
         await db.commit()
+        # Enforce retention: keep at most max_sessions_per_user
+        pruned = await _prune_old_sessions(db, user_id)
+        if pruned:
+            await db.commit()
+            logger.info("Pruned %d oldest session(s) for user=%s", pruned, user_id)
     return sid
 
 
