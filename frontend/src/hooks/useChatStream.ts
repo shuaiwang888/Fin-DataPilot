@@ -25,7 +25,10 @@ export function useChatStream() {
         })) {
           if (ev.event === "session") {
             newSessionId = ev.data.session_id;
-            chat.setSession(newSessionId);
+            // Server just minted a new session — keep the optimistic UI
+            // bubbles we already rendered (user + assistant). Only update
+            // the sessionId reference, don't wipe messages.
+            chat.setSession(newSessionId, { clearMessages: false });
             sessions.setActive(newSessionId);
             // Refresh sidebar session list (best effort)
             api.listSessions().then((r) => sessions.setSessions(r.sessions)).catch(() => {});

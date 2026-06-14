@@ -32,7 +32,10 @@ interface ChatState {
   streaming: boolean;
   pendingText: string; // current streamed tokens (not yet flushed into last message)
 
-  setSession: (id: string | null) => void;
+  /** Update the active session id. By default also clears messages; pass
+   *  `{ clearMessages: false }` to keep the optimistic UI bubbles (used
+   *  when the server hands us a freshly-created session id mid-stream). */
+  setSession: (id: string | null, opts?: { clearMessages?: boolean }) => void;
   appendUser: (text: string) => string;
   appendAssistant: () => string;
   appendThinking: (step: ThinkingStep) => void;
@@ -52,7 +55,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streaming: false,
   pendingText: "",
 
-  setSession: (id) => set({ sessionId: id, messages: [], pendingText: "" }),
+  setSession: (id, opts) => {
+    const clearMessages = opts?.clearMessages !== false;
+    if (clearMessages) {
+      set({ sessionId: id, messages: [], pendingText: "", streaming: false });
+    } else {
+      // Server just minted a new session id mid-stream — keep the
+      // optimistic UI bubbles (user + assistant) we already rendered.
+      set({ sessionId: id });
+    }
+  },
 
   appendUser: (text) => {
     const id = newId();
