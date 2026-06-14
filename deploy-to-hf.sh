@@ -106,15 +106,12 @@ cd "$TMP"
 git init -q -b "$HF_BRANCH"
 git config user.email "deploy@findatapilot.local"
 git config user.name "Fin-DataPilot Deploy Bot"
+
+# Add the remote in this temp repo
+git remote add "$HF_REMOTE" "git@hf.co:spaces/appQQQ/FinDataPilot"
+
 git add -A
 git commit -q -m "$MESSAGE"
-
-# Verify the hf remote exists
-if ! git remote get-url "$HF_REMOTE" >/dev/null 2>&1; then
-  echo "✗ Remote '$HF_REMOTE' is not configured. Add it with:" >&2
-  echo "  git remote add $HF_REMOTE git@hf.co:spaces/appQQQ/FinDataPilot" >&2
-  exit 1
-fi
 
 echo "▶ Pushing to $HF_REMOTE/$HF_BRANCH ..."
 git push -f "$HF_REMOTE" "$HF_BRANCH"
