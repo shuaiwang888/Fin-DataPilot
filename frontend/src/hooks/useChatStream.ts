@@ -79,10 +79,64 @@ export function useChatStream() {
               text: `[${ev.data.verdict}] ${ev.data.reason ?? ""}`,
               ts: Date.now(),
             });
+          } else if (ev.event === "preamble") {
+            // Stash structured query/condition info on the assistant message
+            useChatStore.setState((s) => {
+              const m = [...s.messages];
+              const last = m[m.length - 1];
+              if (last && last.role === "assistant") {
+                m[m.length - 1] = { ...last, preamble: ev.data };
+              }
+              return { messages: m };
+            });
           } else if (ev.event === "token_delta") {
             chat.appendToken(ev.data.text ?? "");
+          } else if (ev.event === "think_chunk") {
+            // Streaming sub-chunk inside a <think> block — buffer it client-side
+            // until the matching think_done event arrives, so the thinking
+            // panel renders a single coherent entry rather than a flood of
+            // tiny fragments.
+            useChatStore.setState((s) => {
+              const w = s as unknown as { _pendingThink?: string };
+              w._pendingThink = (w._pendingThink ?? "") + (ev.data.text ?? "");
+              return s;
+            });
+          } else if (ev.event === "think_done") {
+            useChatStore.setState((s) => {
+              const w = s as unknown as { _pendingThink?: string };
+              const buffered = w._pendingThink ?? ev.data.text ?? "";
+              w._pendingThink = "";
+              if (!buffered.trim()) return s;
+              const m = [...s.messages];
+              const last = m[m.length - 1];
+              if (last && last.role === "assistant") {
+                m[m.length - 1] = {
+                  ...last,
+                  thinking: [
+                    ...(last.thinking ?? []),
+                    {
+                      id: `t_${Date.now()}_${Math.random()}`,
+                      step: "synth_reason",
+                      text: buffered,
+                      ts: Date.now(),
+                    },
+                  ],
+                };
+              }
+              return { messages: m };
+            });
           } else if (ev.event === "message_final") {
             // content is already accumulated via token_delta; ensure finalized
+            if (ev.data?.preamble) {
+              useChatStore.setState((s) => {
+                const m = [...s.messages];
+                const last = m[m.length - 1];
+                if (last && last.role === "assistant") {
+                  m[m.length - 1] = { ...last, preamble: ev.data.preamble };
+                }
+                return { messages: m };
+              });
+            }
             chat.finalizeAssistant();
           } else if (ev.event === "error") {
             chat.appendToken(`\n\n⚠️ ${ev.data.message ?? "出错了"}`);

@@ -40,6 +40,15 @@ export interface Message {
   created_at: string;
 }
 
+export interface AnswerPreamble {
+  skill_name: string;
+  args: Record<string, unknown>;
+  actual_query: string;
+  code_count: number;
+  returned_count: number;
+  chunks_info: unknown;
+}
+
 // SSE event types
 export type AgentEvent =
   | { event: "ping"; data: { ts: number } }
@@ -60,7 +69,13 @@ export type AgentEvent =
     }
   | { event: "reflection"; data: { verdict: string; reason: string } }
   | { event: "summary_start"; data: Record<string, never> }
+  | { event: "preamble"; data: AnswerPreamble }
   | { event: "token_delta"; data: { text: string } }
-  | { event: "message_final"; data: { content: string; tool_calls: unknown[] } }
+  | { event: "think_chunk"; data: { text: string } }
+  | { event: "think_done"; data: { text: string } }
+  | {
+      event: "message_final";
+      data: { content: string; tool_calls: unknown[]; preamble?: AnswerPreamble };
+    }
   | { event: "error"; data: { message: string } }
   | { event: "done"; data: { trace_id?: string } };

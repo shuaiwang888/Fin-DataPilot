@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../../stores/chatStore";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { ToolCallCard } from "./ToolCallCard";
+import { PreambleCard } from "./PreambleCard";
 
 interface Props {
   msg: ChatMessage;
@@ -23,6 +24,7 @@ export function MessageBubble({ msg }: Props) {
       {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
         <ToolCallCard records={msg.toolCalls} />
       )}
+      {!isUser && msg.preamble && <PreambleCard preamble={msg.preamble} />}
       <Bubble
         content={content}
         placement={isUser ? "end" : "start"}

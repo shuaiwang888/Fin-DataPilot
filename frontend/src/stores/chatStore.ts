@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Message } from "../lib/types";
+import type { AnswerPreamble, Message } from "../lib/types";
 
 export interface ThinkingStep {
   id: string;
@@ -24,6 +24,7 @@ export interface ChatMessage extends Omit<Message, "thinking" | "tool_calls"> {
   thinking?: ThinkingStep[];
   toolCalls?: ToolCallRecord[];
   streaming?: boolean;
+  preamble?: AnswerPreamble;
 }
 
 interface ChatState {
