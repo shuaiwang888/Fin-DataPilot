@@ -1,14 +1,10 @@
-# pnpm 11+ workspace config.
+# pnpm workspace config.
 # `packages` is required if this file exists; we only have one local package.
 packages:
   - "."
 
-allowBuilds:
-  esbuild: set this to true or false
-
 # Allow esbuild's postinstall to run (downloads the native binary).
-# Without this, pnpm 11 silently ignores the script and vite build fails
-# with "esbuild binary not found" or the depsStatusCheck refuses to run.
+# Without this, strict pnpm builds may skip the native binary install.
 onlyBuiltDependencies:
   - esbuild
 
