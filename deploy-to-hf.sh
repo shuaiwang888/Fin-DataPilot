@@ -45,6 +45,9 @@ cp    "$ROOT/backend/requirements.txt" "$TMP/requirements.txt"
 cp    "$ROOT/backend/Dockerfile" "$TMP/Dockerfile"
 cp    "$ROOT/backend/start.sh"   "$TMP/start.sh"
 cp    "$ROOT/backend/pyproject.toml" "$TMP/pyproject.toml"
+# Space branding — HF picks up logo.svg / favicon.svg from the repo root.
+[[ -f "$ROOT/backend/logo.svg" ]]    && cp "$ROOT/backend/logo.svg"    "$TMP/logo.svg"
+[[ -f "$ROOT/backend/favicon.svg" ]] && cp "$ROOT/backend/favicon.svg" "$TMP/favicon.svg"
 chmod +x "$TMP/start.sh"
 
 # 3. Copy Skills alongside (the app's data dir points to ./Skills)
