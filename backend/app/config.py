@@ -70,9 +70,28 @@ class Settings(BaseSettings):
         if self.turso_database_url:
             token = f"?token={self.turso_auth_token}" if self.turso_auth_token else ""
             return f"sqlite+aiosqlite://{self.turso_database_url}{token}"
-        # Ensure parent dir exists
-        Path(self.local_sqlite_path).parent.mkdir(parents=True, exist_ok=True)
-        return f"sqlite+aiosqlite:///{self.local_sqlite_path}"
+        # On HF Space, prefer the persistent /data path; otherwise use
+        # the configured local path. Both are persistent for the
+        # container's lifetime, but /data survives rebuilds.
+        path = self.persistent_db_path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite+aiosqlite:///{path}"
+
+    @property
+    def persistent_db_path(self) -> str:
+        """Path used on HuggingFace Spaces. The /data directory persists
+        across restarts and rebuilds, unlike the project root which
+        gets wiped on every container rebuild.
+
+        Falls back to the configured local path if /data isn't writable.
+        """
+        # On HF Space, /data is the only path that survives rebuilds.
+        hf_data = Path("/data/findatapilot.db")
+        try:
+            hf_data.parent.mkdir(parents=True, exist_ok=True)
+            return str(hf_data)
+        except OSError:
+            return self.local_sqlite_path
 
     @property
     def iwencai_skill_id_map(self) -> dict[str, str]:

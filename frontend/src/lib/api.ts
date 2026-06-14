@@ -41,6 +41,8 @@ export const api = {
     }),
   deleteSession: (id: string) =>
     http<{ id: string; deleted: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
+  deleteAllSessions: () =>
+    http<{ deleted: number; user_id: string }>("/api/sessions", { method: "DELETE" }),
 };
 
 export type { ToolSpec, SkillItem, Session, Message };

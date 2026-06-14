@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 from app.storage.repository import (
     create_session_async,
+    delete_all_sessions,
+    delete_all_sessions_async,
     delete_session_async,
     get_session_async,
     list_messages_async,
@@ -69,6 +71,13 @@ async def patch_session(session_id: str, body: SessionPatch) -> dict:
 async def delete_session_endpoint(session_id: str) -> dict:
     await delete_session_async(session_id)
     return {"id": session_id, "deleted": True}
+
+
+@router.delete("/sessions")
+async def delete_all_sessions_endpoint(user_id: str = "default") -> dict:
+    """Wipe every session for this user. Returns the count of deleted rows."""
+    count = await delete_all_sessions_async(user_id=user_id)
+    return {"deleted": count, "user_id": user_id}
 
 
 @router.post("/sessions/{session_id}/messages")

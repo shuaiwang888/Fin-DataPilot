@@ -102,6 +102,22 @@ def delete_session(session_id: str) -> None:
     asyncio.run(delete_session_async(session_id))
 
 
+async def delete_all_sessions_async(user_id: str = "default") -> int:
+    """Delete every session belonging to `user_id`. Returns the count."""
+    from sqlalchemy import delete
+
+    async with SessionLocal() as db:
+        result = await db.execute(delete(Session).where(Session.user_id == user_id))
+        await db.commit()
+        return result.rowcount or 0
+
+
+def delete_all_sessions(user_id: str = "default") -> int:
+    import asyncio
+
+    return asyncio.run(delete_all_sessions_async(user_id))
+
+
 # ---------- messages ----------
 
 async def save_message_async(

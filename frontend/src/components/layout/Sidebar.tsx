@@ -1,5 +1,11 @@
-import { Button, List, Popconfirm, Input, Tooltip } from "antd";
-import { PlusOutlined, DeleteOutlined, EditOutlined, AppstoreOutlined } from "@ant-design/icons";
+import { Button, List, Popconfirm, Input, Tooltip, App } from "antd";
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  AppstoreOutlined,
+  ClearOutlined,
+} from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useChatStore } from "../../stores/chatStore";
@@ -10,6 +16,7 @@ export function Sidebar() {
   const sessions = useSessionStore();
   const chat = useChatStore();
   const skills = useSkillStore();
+  const { message } = App.useApp();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
 
@@ -60,6 +67,17 @@ export function Sidebar() {
     sessions.remove(id);
     if (sessions.activeId === id) {
       chat.reset();
+    }
+  };
+
+  const handleClearAll = async () => {
+    try {
+      const r = await api.deleteAllSessions();
+      sessions.setSessions([]);
+      chat.reset();
+      message.success(`已清空 ${r.deleted} 条对话历史`);
+    } catch (e) {
+      message.error("清空失败：" + (e as Error).message);
     }
   };
 
@@ -170,6 +188,27 @@ export function Sidebar() {
         >
           Skill 管理 ({skills.skills.filter((s) => s.enabled).length}/{skills.skills.length})
         </Button>
+        {sessions.sessions.length > 0 && (
+          <Popconfirm
+            title="清空全部对话历史？"
+            description="此操作不可撤销，所有对话将被永久删除。"
+            okText="清空"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={handleClearAll}
+          >
+            <Button
+              block
+              type="text"
+              danger
+              size="small"
+              icon={<ClearOutlined />}
+              style={{ marginTop: 8 }}
+            >
+              清空历史
+            </Button>
+          </Popconfirm>
+        )}
       </div>
     </div>
   );
