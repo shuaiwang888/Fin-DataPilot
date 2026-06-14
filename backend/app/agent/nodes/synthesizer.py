@@ -92,6 +92,10 @@ def _extract_preamble(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
 # Tunables
 MAX_PENDING_TAIL = 12  # chars kept back looking for a partial <think>/</think>
 HEARTBEAT_INTERVAL = 4.0  # seconds between heartbeat events during long streaming
+# If a <think> block keeps growing past this many characters without
+# a closing </think> tag, the LLM likely forgot to close it. Abandon
+# the think block — emit everything as the answer and close the panel.
+MAX_THINK_BLOCK_CHARS = 400
 
 
 async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
@@ -125,47 +129,7 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
     think_text = ""
     in_think = False
     pending = ""
-
-    # Heartbeat task: emits a tick every HEARTBEAT_INTERVAL seconds while we're
-    # waiting on the LLM, so the frontend can show a "💭 thinking..." state.
-    heartbeat_stop = asyncio.Event()
     last_event_ts = time.monotonic()
-
-    async def _heartbeat() -> None:
-        nonlocal last_event_ts
-        try:
-            while not heartbeat_stop.is_set():
-                await asyncio.sleep(HEARTBEAT_INTERVAL)
-                if time.monotonic() - last_event_ts >= HEARTBEAT_INTERVAL:
-                    yield_ = {
-                        "event": "heartbeat",
-                        "data": {
-                            "ts": time.time(),
-                            "in_think": in_think,
-                            "pending_chars": len(pending),
-                        },
-                    }
-                    last_event_ts = time.monotonic()
-                    # We can't yield from here — push into a queue instead
-                    # by abusing the closure: just record the tick, the
-                    # main loop will emit it on the next safe boundary.
-        except asyncio.CancelledError:
-            return
-
-    hb_task = asyncio.create_task(_heartbeat())
-
-    def _flush_text(s: str) -> None:
-        """Helper: emit a chunk of text in the right bucket."""
-        nonlocal final_text, think_text, in_think
-        if not s:
-            return
-        last_event_ts = time.monotonic()
-        if in_think:
-            think_text += s
-            # The actual yield happens in the main loop after this returns;
-            # we stash in think_text buffer.
-        else:
-            final_text += s
 
     try:
         last_emit_ts = time.monotonic()
@@ -195,10 +159,29 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
                         changed = True
                         last_emit_ts = time.monotonic()
                     else:
+                        # Watchdog: if the think block is wildly long without
+                        # a closing tag, the LLM forgot to emit </think>.
+                        # Abandon the think block — emit everything we have
+                        # as the answer and close the panel.
+                        if len(think_text) > MAX_THINK_BLOCK_CHARS:
+                            closing_tail = pending[-MAX_PENDING_TAIL:]
+                            head = pending[: -MAX_PENDING_TAIL] if len(pending) > MAX_PENDING_TAIL else pending
+                            if head:
+                                think_text += head
+                                yield {"event": "think_chunk", "data": {"text": head}}
+                            yield {
+                                "event": "think_done",
+                                "data": {"text": think_text.strip()},
+                            }
+                            think_text = ""
+                            in_think = False
+                            pending = closing_tail
+                            changed = True
+                            last_emit_ts = time.monotonic()
                         # Keep last 12 chars looking for the closing tag,
                         # but flush anything larger every heartbeat to
                         # avoid starving the UI.
-                        if len(pending) > MAX_PENDING_TAIL and (
+                        elif len(pending) > MAX_PENDING_TAIL and (
                             time.monotonic() - last_emit_ts >= HEARTBEAT_INTERVAL
                         ):
                             emit = pending[:-MAX_PENDING_TAIL]
@@ -269,12 +252,6 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("synthesizer streaming failed")
         yield {"event": "error", "data": {"message": f"总结失败: {exc}"}}
-    finally:
-        heartbeat_stop.set()
-        try:
-            await asyncio.wait_for(hb_task, timeout=0.5)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            hb_task.cancel()
 
     if not final_text and calls:
         last = calls[-1]

@@ -1,6 +1,7 @@
 import { Collapse } from "antd";
 import { useState } from "react";
 import type { ThinkingStep } from "../../stores/chatStore";
+import { useChatStore } from "../../stores/chatStore";
 
 interface Props {
   steps: ThinkingStep[];
@@ -14,9 +15,17 @@ const stepLabel: Record<string, string> = {
 };
 
 export function ThinkingPanel({ steps }: Props) {
-  // Default to open when there's content (so the user immediately sees
-  // reasoning — they can collapse it themselves).
-  const [activeKeys, setActiveKeys] = useState<string[]>(["thinking"]);
+  // Default state:
+  //   - reasoning still streaming (live placeholder present) → open
+  //   - answer already started streaming → collapsed
+  //   - either side can override via click
+  const answerStarted = useChatStore((s) => s.answerStarted);
+  const defaultOpen =
+    !answerStarted && steps.some((s) => s.text === "💭 思考中…");
+  const [userOverride, setUserOverride] = useState<"open" | "closed" | null>(null);
+  const isOpen = userOverride ? userOverride === "open" : defaultOpen;
+  const [activeKeys, setActiveKeys] = useState<string[]>(isOpen ? ["thinking"] : []);
+
   if (!steps || steps.length === 0) return null;
   const isThinking = steps.some((s) => s.text === "💭 思考中…");
   return (
@@ -24,7 +33,13 @@ export function ThinkingPanel({ steps }: Props) {
       ghost
       size="small"
       activeKey={activeKeys}
-      onChange={(k) => setActiveKeys(Array.isArray(k) ? k : [k])}
+      onChange={(k) => {
+        const arr = Array.isArray(k) ? k : [k];
+        setActiveKeys(arr);
+        // Record user override so the auto-toggle stops overriding them.
+        if (arr.length > 0) setUserOverride("open");
+        else setUserOverride("closed");
+      }}
       items={[
         {
           key: "thinking",

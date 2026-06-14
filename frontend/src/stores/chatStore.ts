@@ -33,6 +33,11 @@ interface ChatState {
   streaming: boolean;
   pendingText: string; // current streamed tokens (not yet flushed into last message)
 
+  /** Has the answer body started streaming for the current assistant turn?
+   *  Reset on every new assistant message; set on the first token_delta.
+   *  Used by ThinkingPanel to auto-collapse once the answer is flowing. */
+  answerStarted: boolean;
+
   /** Update the active session id. By default also clears messages; pass
    *  `{ clearMessages: false }` to keep the optimistic UI bubbles (used
    *  when the server hands us a freshly-created session id mid-stream). */
@@ -42,6 +47,7 @@ interface ChatState {
   appendThinking: (step: ThinkingStep) => void;
   appendToolCall: (tc: ToolCallRecord) => void;
   appendToken: (text: string) => void;
+  setAnswerStarted: (v: boolean) => void;
   finalizeAssistant: () => void;
   setMessages: (msgs: Message[]) => void;
   reset: () => void;
@@ -55,11 +61,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   streaming: false,
   pendingText: "",
+  answerStarted: false,
 
   setSession: (id, opts) => {
     const clearMessages = opts?.clearMessages !== false;
     if (clearMessages) {
-      set({ sessionId: id, messages: [], pendingText: "", streaming: false });
+      set({
+        sessionId: id,
+        messages: [],
+        pendingText: "",
+        streaming: false,
+        answerStarted: false,
+      });
     } else {
       // Server just minted a new session id mid-stream — keep the
       // optimistic UI bubbles (user + assistant) we already rendered.
@@ -95,6 +108,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ],
       pendingText: "",
       streaming: true,
+      answerStarted: false,
     }));
     return id;
   },
@@ -135,9 +149,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (last && last.role === "assistant" && last.streaming) {
         msgs[msgs.length - 1] = { ...last, content: pending };
       }
-      return { messages: msgs, pendingText: pending };
+      return {
+        messages: msgs,
+        pendingText: pending,
+        answerStarted: true, // first token_delta = answer is flowing
+      };
     });
   },
+
+  setAnswerStarted: (v) => set({ answerStarted: v }),
 
   finalizeAssistant: () => {
     set((s) => {
@@ -155,8 +175,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: msgs.map((m) => ({ ...m, thinking: [], toolCalls: [] })),
       pendingText: "",
       streaming: false,
+      answerStarted: false,
     });
   },
 
-  reset: () => set({ sessionId: null, messages: [], pendingText: "", streaming: false }),
+  reset: () =>
+    set({
+      sessionId: null,
+      messages: [],
+      pendingText: "",
+      streaming: false,
+      answerStarted: false,
+    }),
 }));
