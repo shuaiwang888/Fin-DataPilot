@@ -64,7 +64,7 @@ sdk: docker
 app_port: 7860
 pinned: true
 license: mit
-short_description: Natural-language financial data agent (LangGraph + 4 iWencai skills)
+short_description: NL financial data agent (LangGraph + 4 iWencai skills)
 ---
 
 # Fin-DataPilot Backend
@@ -107,8 +107,19 @@ git init -q -b "$HF_BRANCH"
 git config user.email "deploy@findatapilot.local"
 git config user.name "Fin-DataPilot Deploy Bot"
 
-# Add the remote in this temp repo
-git remote add "$HF_REMOTE" "git@hf.co:spaces/appQQQ/FinDataPilot"
+# Auth strategy:
+#   - SSH by default (works in most sandboxes; requires the SSH public key to be
+#     added to https://huggingface.co/settings/keys for the appQQQ account)
+#   - HTTPS + token as fallback (set HF_TOKEN env var)
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  TOKEN="$HF_TOKEN"
+  HF_HTTPS_URL="https://oauth2:${TOKEN}@huggingface.co/spaces/appQQQ/FinDataPilot"
+  git remote add "$HF_REMOTE" "$HF_HTTPS_URL"
+  echo "▶ Using HTTPS + token auth"
+else
+  git remote add "$HF_REMOTE" "git@hf.co:spaces/appQQQ/FinDataPilot"
+  echo "▶ Using SSH (set HF_TOKEN to override)"
+fi
 
 git add -A
 git commit -q -m "$MESSAGE"
