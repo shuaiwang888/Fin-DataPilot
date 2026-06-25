@@ -1,6 +1,7 @@
 """Pydantic-settings configuration. Single source of truth for all env-driven config."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -84,20 +85,58 @@ class Settings(BaseSettings):
         return f"sqlite+aiosqlite:///{path}"
 
     @property
-    def persistent_db_path(self) -> str:
-        """Path used on HuggingFace Spaces. The /data directory persists
-        across restarts and rebuilds, unlike the project root which
-        gets wiped on every container rebuild.
+    def is_hf_space(self) -> bool:
+        """True when we appear to be running on a HuggingFace Space.
 
-        Falls back to the configured local path if /data isn't writable.
+        Detected by either the SPACE_ID env (set by the HF runtime on
+        every Space) or by /data already existing and being writable —
+        because /data is the canonical mount point for HF Space
+        persistent storage.
         """
-        # On HF Space, /data is the only path that survives rebuilds.
-        hf_data = Path("/data/findatapilot.db")
+        if os.environ.get("SPACE_ID"):
+            return True
         try:
-            hf_data.parent.mkdir(parents=True, exist_ok=True)
-            return str(hf_data)
+            return Path("/data").is_dir() and os.access("/data", os.W_OK)
         except OSError:
-            return self.local_sqlite_path
+            return False
+
+    @property
+    def persistent_db_path(self) -> str:
+        """Where the SQLite file should live on disk.
+
+        Resolution order:
+          1. If `turso_database_url` is set → that's remote, this
+             property is irrelevant (engine is built from `database_url`
+             which prefers Turso).
+          2. If we're on HF Space → MUST be /data/findatapilot.db.
+             We probe writability up front and raise if it fails, so a
+             misconfigured Space is loud, not silent.
+          3. Otherwise → the configured local path (./data/...).
+
+        Note: HF Space persistent storage must be enabled in the Space's
+        Settings page, otherwise /data is wiped on every rebuild just
+        like any other container path. The startup log
+        (`Database tables ready at ...`) prints the resolved path —
+        check it matches `/data/...` on HF.
+        """
+        if self.is_hf_space:
+            hf_db = Path("/data/findatapilot.db")
+            try:
+                hf_db.parent.mkdir(parents=True, exist_ok=True)
+                # Real write test — mkdir alone succeeds even on
+                # non-persistent /data, but open(O_CREAT) doesn't.
+                with open(hf_db, "ab") as _f:
+                    pass
+                return str(hf_db)
+            except OSError as exc:
+                # Loud failure: better to crash on startup than lose
+                # the user's history on the next restart.
+                raise RuntimeError(
+                    f"/data is not writable on this HF Space (HF persistent "
+                    f"storage must be enabled in the Space's Settings). "
+                    f"Underlying error: {exc}"
+                ) from exc
+        return self.local_sqlite_path
 
     @property
     def iwencai_skill_id_map(self) -> dict[str, str]:
