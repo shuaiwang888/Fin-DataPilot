@@ -14,6 +14,29 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Multipart upload — does NOT set Content-Type, so the browser fills in
+ *  the boundary. Used for skill zip uploads. */
+async function uploadForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   health: () => http<{ ok: boolean; tools: { count: number; names: string[] } }>("/api/health"),
   listSkills: () => http<{ skills: SkillItem[] }>("/api/skills"),
@@ -27,6 +50,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ args }),
     }),
+  /** Upload a skill zip. Returns the new SkillItem on success. */
+  uploadSkill: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return uploadForm<SkillItem>("/api/skills/upload", form);
+  },
+  /** Delete an uploaded skill. Throws on built-in skills (400). */
+  deleteSkill: (name: string) => del<{ deleted: string }>(`/api/skills/${name}`),
   listSessions: () => http<{ sessions: Session[] }>("/api/sessions"),
   createSession: (title: string) =>
     http<{ id: string; title: string; created_at: string }>("/api/sessions", {
@@ -46,3 +77,4 @@ export const api = {
 };
 
 export type { ToolSpec, SkillItem, Session, Message };
+

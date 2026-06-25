@@ -21,6 +21,8 @@ export interface SkillItem {
   spec: ToolSpec;
   enabled: boolean;
   requirements_met?: Record<string, boolean>;
+  /** True if the skill was uploaded at runtime (can be deleted). */
+  uploaded?: boolean;
 }
 
 export interface Session {

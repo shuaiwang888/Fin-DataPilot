@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.skills import user_uploads
 from app.skills.registry import REGISTRY
 
 router = APIRouter()
@@ -27,7 +28,11 @@ def _is_env_configured(name: str) -> bool:
 
 @router.get("/skills")
 async def list_skills() -> dict:
-    """List all registered skills, with enabled/disabled state and runtime env status."""
+    """List all registered skills, with enabled/disabled state, runtime
+    env status, and an `uploaded` flag distinguishing user-uploaded
+    skills (which can be deleted) from built-ins (which cannot)."""
+    settings = get_settings()
+    user_root = settings.user_skills_dir
     return {
         "skills": [
             {
@@ -36,6 +41,7 @@ async def list_skills() -> dict:
                 "requirements_met": {
                     env: _is_env_configured(env) for env in s.requires
                 },
+                "uploaded": os.path.isdir(os.path.join(user_root, s.name)),
             }
             for s in REGISTRY.list_specs()
         ]
@@ -69,3 +75,37 @@ async def debug_skill(name: str, body: SkillDebugRequest) -> dict:
         raise HTTPException(400, f"Skill '{name}' is disabled")
     result = await R.dispatch(name, body.args)
     return result.to_dict()
+
+
+@router.post("/skills/upload")
+async def upload_skill(file: UploadFile = File(...)) -> dict:
+    """Upload a new skill as a zip file. See backend/app/skills/user_uploads.py
+    for the expected zip layout (one top-level directory containing
+    SKILL.md and a handler module)."""
+    settings = get_settings()
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(400, "Empty upload")
+    if len(blob) > settings.max_skill_upload_bytes:
+        raise HTTPException(
+            413,
+            f"Upload exceeds {settings.max_skill_upload_bytes // (1024*1024)} MB limit",
+        )
+    try:
+        return user_uploads.install_skill_from_zip(blob)
+    except ValueError as e:
+        # 409 for name conflicts (caller can rebrand), 400 for everything else
+        msg = str(e)
+        if "conflicts with a built-in" in msg or "already" in msg:
+            raise HTTPException(409, msg)
+        raise HTTPException(400, msg)
+
+
+@router.delete("/skills/{name}")
+async def delete_skill(name: str) -> dict:
+    """Delete an uploaded skill. Built-in skills cannot be deleted."""
+    try:
+        user_uploads.uninstall_skill(name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"deleted": name}

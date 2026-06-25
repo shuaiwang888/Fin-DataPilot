@@ -4,6 +4,7 @@ Triggered by the user adding HF_SSH_PRIVATE_KEY to GitHub Secrets.
 """
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -18,7 +19,10 @@ from app.api import agent, health, sessions, skills
 from app.config import get_settings
 from app.db_init import init_db
 from app.skills import registry as _skills_registry  # noqa: F401 — trigger registration
+from app.skills.user_uploads import load_uploaded_skills_at_startup
 from app.utils.trace import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -26,6 +30,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     setup_logging(settings.log_level)
     await init_db()
+    # After the 4 built-in skills have registered, re-import any
+    # previously uploaded skills so they survive container restarts.
+    n_loaded = load_uploaded_skills_at_startup()
+    if n_loaded:
+        logger.info(
+            "Loaded %d uploaded skill(s) from %s",
+            n_loaded,
+            settings.user_skills_dir,
+        )
     yield
 
 

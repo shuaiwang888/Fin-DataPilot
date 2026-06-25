@@ -1,13 +1,29 @@
-import { Drawer, Switch, Tag, Form, Input, Button, Space, message, Empty } from "antd";
+import {
+  Button,
+  Drawer,
+  Empty,
+  Form,
+  Input,
+  Popconfirm,
+  Space,
+  Switch,
+  Tag,
+  Upload,
+  message,
+} from "antd";
+import { InboxOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { useSkillStore } from "../../stores/skillStore";
 import { api } from "../../lib/api";
 import type { SkillItem } from "../../lib/types";
 
+const { Dragger } = Upload;
+
 export function SkillManagerDrawer() {
   const skills = useSkillStore();
   const [debugInputs, setDebugInputs] = useState<Record<string, Record<string, string>>>({});
   const [debugResult, setDebugResult] = useState<Record<string, unknown>>({});
+  const [uploading, setUploading] = useState(false);
   const [msg, ctx] = message.useMessage();
 
   useEffect(() => {
@@ -39,6 +55,16 @@ export function SkillManagerDrawer() {
     }
   };
 
+  const handleDelete = async (s: SkillItem) => {
+    try {
+      await api.deleteSkill(s.spec.name);
+      skills.removeSkill(s.spec.name);
+      msg.success(`已删除 skill：${s.spec.display_name}`);
+    } catch (e) {
+      msg.error("删除失败：" + (e as Error).message);
+    }
+  };
+
   return (
     <>
       {ctx}
@@ -46,13 +72,46 @@ export function SkillManagerDrawer() {
         title="Skill 管理"
         open={skills.drawerOpen}
         onClose={() => skills.setDrawerOpen(false)}
-        width={520}
+        width={560}
       >
-        {skills.skills.length === 0 ? (
-          <Empty description="加载中..." />
-        ) : (
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            {skills.skills.map((s) => (
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Dragger
+            name="file"
+            accept=".zip"
+            multiple={false}
+            showUploadList={false}
+            disabled={uploading}
+            beforeUpload={async (file) => {
+              setUploading(true);
+              try {
+                const newSkill = await api.uploadSkill(file);
+                skills.addSkill(newSkill);
+                msg.success(`已安装 skill：${newSkill.spec.display_name}`);
+              } catch (e) {
+                msg.error("上传失败：" + (e as Error).message);
+              } finally {
+                setUploading(false);
+              }
+              // Prevent AntD's default upload — we already did it ourselves.
+              return false;
+            }}
+            style={{ background: uploading ? "#fafafa" : undefined }}
+          >
+            <p className="ant-upload-drag-icon" style={{ marginBottom: 4 }}>
+              <InboxOutlined />
+            </p>
+            <p className="ant-upload-text">
+              {uploading ? "正在安装…" : "点击或拖入 .zip 文件上传新 Skill"}
+            </p>
+            <p className="ant-upload-hint" style={{ fontSize: 12, color: "#999" }}>
+              zip 须含一个顶层目录，里面放 SKILL.md + 同名 .py handler（≤ 20 MB）
+            </p>
+          </Dragger>
+
+          {skills.skills.length === 0 ? (
+            <Empty description="加载中..." />
+          ) : (
+            skills.skills.map((s) => (
               <div
                 key={s.spec.name}
                 style={{
@@ -70,11 +129,26 @@ export function SkillManagerDrawer() {
                     </Tag>
                     <Tag color="blue">{s.spec.category}</Tag>
                     <Tag>v{s.spec.version}</Tag>
+                    {s.uploaded && <Tag color="purple">用户上传</Tag>}
                   </div>
-                  <Switch
-                    checked={s.enabled}
-                    onChange={(v) => handleToggle(s, v)}
-                  />
+                  <Space size={4}>
+                    {s.uploaded && (
+                      <Popconfirm
+                        title="确定删除？"
+                        description={`将移除「${s.spec.display_name}」及其磁盘文件。此操作不可撤销。`}
+                        okText="删除"
+                        cancelText="取消"
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() => handleDelete(s)}
+                      >
+                        <Button danger size="small">删除</Button>
+                      </Popconfirm>
+                    )}
+                    <Switch
+                      checked={s.enabled}
+                      onChange={(v) => handleToggle(s, v)}
+                    />
+                  </Space>
                 </div>
                 <div style={{ color: "#666", fontSize: 12, marginBottom: 8 }}>{s.spec.description}</div>
                 <div style={{ fontSize: 12, color: "#999", marginBottom: 8 }}>
@@ -152,9 +226,9 @@ export function SkillManagerDrawer() {
                   </pre>
                 )}
               </div>
-            ))}
-          </Space>
-        )}
+            ))
+          )}
+        </Space>
       </Drawer>
     </>
   );

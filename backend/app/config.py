@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     turso_auth_token: str = ""
     local_sqlite_path: str = "./data/findatapilot.db"
 
+    # ===== User-uploaded skills =====
+    # Skills installed at runtime via POST /api/skills/upload live under
+    # this directory. Must be on a path that survives HF Space rebuilds
+    # (see user_skills_dir property below).
+    local_user_skills_path: str = "./data/user_skills"
+    # Hard cap on the size of an uploaded skill zip (after extraction).
+    # Protects against zip bombs.
+    max_skill_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+
     # ===== Session retention =====
     # Per-user cap on stored sessions. When a new session is created
     # and the user already has this many, the OLDEST session (by
@@ -137,6 +146,19 @@ class Settings(BaseSettings):
                     f"Underlying error: {exc}"
                 ) from exc
         return self.local_sqlite_path
+
+    @property
+    def user_skills_dir(self) -> str:
+        """Directory for user-uploaded skills. Must persist across HF
+        Space rebuilds, so we use /data/user_skills on HF Space and
+        ./data/user_skills locally. Directory is created on first access.
+        """
+        if self.is_hf_space:
+            d = Path("/data/user_skills")
+        else:
+            d = Path(self.local_user_skills_path)
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d)
 
     @property
     def iwencai_skill_id_map(self) -> dict[str, str]:
