@@ -1,10 +1,39 @@
 import { useCallback, useRef } from "react";
 import { useChatStore } from "../stores/chatStore";
+import type { ChatMessage, ThinkingStep } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { streamChat } from "../lib/sse";
 import { api } from "../lib/api";
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+
+/** Text the synthesizer placeholders carry (matched in ThinkingPanel.tsx). */
+const THINKING_PLACEHOLDER_TEXT = "💭 思考中…";
+
+/** Remove every "💭 思考中…" placeholder step from the last assistant
+ *  message's thinking array. Called when:
+ *   - summary_start arrives (synthesizer about to start; old heartbeat
+ *     placeholders from before streaming are stale)
+ *   - token_delta first arrives (real answer is flowing, placeholders
+ *     should vanish)
+ *   - message_final / done arrives (defense in depth — if any slipped
+ *     through, scrub them so the panel label flips from "思考中…" to
+ *     "思考过程")
+ *
+ *  Returns the new messages array if anything was removed, else null.
+ *  Caller can decide whether to setState with the returned array.
+ */
+function stripThinkingPlaceholders(messages: ChatMessage[]): ChatMessage[] | null {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return null;
+  const thinking = last.thinking ?? [];
+  const cleaned = thinking.filter((t) => t.text !== THINKING_PLACEHOLDER_TEXT);
+  if (cleaned.length === thinking.length) return null;
+  return [
+    ...messages.slice(0, -1),
+    { ...last, thinking: cleaned },
+  ];
+}
 
 export function useChatStream() {
   const chat = useChatStore();
@@ -100,6 +129,13 @@ export function useChatStream() {
               return { messages: m };
             });
           } else if (ev.event === "token_delta") {
+            // First real answer token → scrub any leftover "💭 思考中…"
+            // placeholders so the panel label flips from "思考中…" to
+            // "思考过程" the moment the answer starts streaming.
+            useChatStore.setState((s) => {
+              const cleaned = stripThinkingPlaceholders(s.messages);
+              return cleaned ? { messages: cleaned } : s;
+            });
             chat.appendToken(ev.data.text ?? "");
           } else if (ev.event === "think_chunk") {
             // Stream the thinking into a single live-updated step so the
@@ -150,6 +186,11 @@ export function useChatStream() {
           } else if (ev.event === "heartbeat") {
             // Server is still generating — keep the live thinking step
             // visible (or add a placeholder so the UI shows a spinner).
+            // Guards (avoid spamming new placeholders):
+            //   1. _pendingThink already set → live text streaming, no-op
+            //   2. _liveThinkId already points at a step in the array → no-op
+            //   3. answerStarted → real answer already flowing, no-op
+            //   4. any "💭 思考中…" step already exists → no-op
             useChatStore.setState((s) => {
               const w = s as unknown as {
                 _pendingThink?: string;
@@ -157,33 +198,51 @@ export function useChatStream() {
                 _lastHeartbeatAt?: number;
               };
               w._lastHeartbeatAt = Date.now();
-              if (w._pendingThink) return s; // already showing live text
+              if (w._pendingThink) return s;
+              if (s.answerStarted) return s;
               const m = [...s.messages];
               const last = m[m.length - 1];
-              if (last && last.role === "assistant") {
-                const liveId = w._liveThinkId;
-                if (liveId && (last.thinking ?? []).some((t) => t.id === liveId)) {
-                  return s; // already a placeholder
-                }
-                const id = `t_live_${Date.now()}`;
-                w._liveThinkId = id;
-                m[m.length - 1] = {
-                  ...last,
-                  thinking: [
-                    ...(last.thinking ?? []),
-                    { id, step: "synth_reason", text: "💭 思考中…", ts: Date.now() },
-                  ],
-                };
+              if (!last || last.role !== "assistant") return s;
+              const liveId = w._liveThinkId;
+              if (liveId && (last.thinking ?? []).some((t) => t.id === liveId)) return s;
+              // Guard 4: if ANY placeholder is already in the array,
+              // don't add another. (Handles the case where summary_start
+              // cleared _liveThinkId but the old placeholder is still in
+              // the array — otherwise this branch would create duplicates.)
+              const hasPlaceholder = (last.thinking ?? []).some(
+                (t) => t.text === "💭 思考中…"
+              );
+              if (hasPlaceholder) {
+                // Re-anchor _liveThinkId so the next heartbeat doesn't
+                // try to add another one.
+                const existing = (last.thinking ?? []).find(
+                  (t) => t.text === "💭 思考中…"
+                );
+                if (existing) w._liveThinkId = existing.id;
+                return s;
               }
+              const id = `t_live_${Date.now()}`;
+              w._liveThinkId = id;
+              m[m.length - 1] = {
+                ...last,
+                thinking: [
+                  ...(last.thinking ?? []),
+                  { id, step: "synth_reason", text: "💭 思考中…", ts: Date.now() },
+                ],
+              };
               return { messages: m };
             });
           } else if (ev.event === "summary_start") {
-            // Reset thinking buffer for the new run
+            // Reset thinking buffer for the new run AND scrub any
+            // leftover "💭 思考中…" placeholders from before the
+            // synthesizer started. Otherwise the ThinkingPanel's label
+            // keeps saying "思考中…" even after the answer is streaming.
             useChatStore.setState((s) => {
               const w = s as unknown as { _pendingThink?: string; _liveThinkId?: string };
               w._pendingThink = "";
               w._liveThinkId = undefined;
-              return s;
+              const cleaned = stripThinkingPlaceholders(s.messages);
+              return cleaned ? { messages: cleaned } : s;
             });
           } else if (ev.event === "message_final") {
             // The synthesizer's payload carries the final answer text.
@@ -224,6 +283,15 @@ export function useChatStream() {
             chat.appendToken(`\n\n⚠️ ${ev.data.message ?? "出错了"}`);
             chat.finalizeAssistant();
           } else if (ev.event === "done") {
+            // Defense in depth: scrub any "💭 思考中…" placeholders
+            // that survived the synthesizer's normal flow. Without
+            // this, if a heartbeat added a placeholder AFTER the last
+            // summary_start (race) or AFTER the answer started
+            // streaming, the panel would still say "思考中…" forever.
+            useChatStore.setState((s) => {
+              const cleaned = stripThinkingPlaceholders(s.messages);
+              return cleaned ? { messages: cleaned } : s;
+            });
             chat.finalizeAssistant();
           }
         }
