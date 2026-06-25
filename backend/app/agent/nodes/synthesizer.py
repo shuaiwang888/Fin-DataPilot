@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from typing import Any, AsyncIterator
@@ -106,6 +107,121 @@ HEARTBEAT_INTERVAL = 4.0  # seconds between heartbeat events during long streami
 # the think block — emit everything as the answer and close the panel.
 MAX_THINK_BLOCK_CHARS = 200
 
+# Truncation budget for what we send to the LLM as context.
+# Skill results (news/announcement/report) can each be 20-100KB of
+# raw JSON if the upstream returned a lot of articles with full text.
+# We can't send all of that — it would blow past the context window
+# AND dilute the LLM's attention. Strategy:
+#   1. Per-item: keep ALL items' metadata (title/date/source/link),
+#      but truncate any long text field (content/summary/abstract/...)
+#      to MAX_ITEM_TEXT_CHARS so the LLM can quote or summarize each.
+#   2. Per-skill: cap total chars at MAX_RESULT_CHARS; drop trailing
+#      items if needed and append a "...还有 N 条未显示" marker so the
+#      LLM knows the data was longer.
+# Configurable via env: SYNTH_MAX_RESULT_CHARS / SYNTH_MAX_ITEM_CHARS.
+MAX_RESULT_CHARS = 30_000
+MAX_ITEM_TEXT_CHARS = 600
+
+# Heuristic: field names whose values are likely long free text and
+# should be eligible for per-item truncation. Match is case-insensitive
+# substring on the key.
+_LONG_TEXT_FIELDS = (
+    "content", "contents", "summary", "summaries", "abstract",
+    "description", "text", "body", "article_text", "news_content",
+    "announcement_content", "report_content", "detail", "details",
+)
+
+
+def _truncate_long_text_fields(obj: Any, max_chars: int) -> tuple[Any, int]:
+    """Recursively walk `obj`. For each string field whose name looks
+    like long free text AND whose value exceeds `max_chars`, replace
+    with `value[:max_chars] + '…(已截断)'`. Returns (new_obj, bytes_saved).
+    """
+    saved = 0
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            if (
+                isinstance(v, str)
+                and len(v) > max_chars
+                and any(field in k.lower() for field in _LONG_TEXT_FIELDS)
+            ):
+                saved += len(v) - max_chars
+                out[k] = v[:max_chars] + "…(已截断)"
+            else:
+                child, child_saved = _truncate_long_text_fields(v, max_chars)
+                out[k] = child
+                saved += child_saved
+        return out, saved
+    if isinstance(obj, list):
+        out_list = []
+        for item in obj:
+            child, child_saved = _truncate_long_text_fields(item, max_chars)
+            out_list.append(child)
+            saved += child_saved
+        return out_list, saved
+    return obj, 0
+
+
+def _truncate_result_for_prompt(result: Any, max_chars: int, max_item_text_chars: int) -> str:
+    """Serialize a skill result for inclusion in the synthesizer prompt.
+
+    Two layers of truncation:
+      1. Per-item text fields → `max_item_text_chars` (preserves item count
+         and metadata so the LLM still sees all titles / dates / sources).
+      2. Total serialized JSON → `max_chars` (drops trailing items to
+         stay within budget, with a marker noting how many were dropped).
+    """
+    if not result:
+        return json.dumps(result, ensure_ascii=False)
+
+    # Layer 1: per-item text truncation.
+    truncated, _saved = _truncate_long_text_fields(result, max_item_text_chars)
+
+    # Serialize so we can measure.
+    serialized = json.dumps(truncated, ensure_ascii=False)
+
+    # Layer 2: total char budget. If still too long, find the array
+    # member (announcements / articles / reports / datas / data / rows)
+    # and drop trailing items until it fits.
+    if len(serialized) <= max_chars:
+        return serialized
+
+    # Try to locate the items list — most skills put it under
+    # data.<name> where <name> is the plural form. Fall back to walking
+    # to find a list.
+    candidate_keys = ("announcements", "articles", "reports", "datas", "rows", "data", "items")
+    items_path: list[str] | None = None
+    if isinstance(truncated, dict):
+        data_obj = truncated.get("data")
+        if isinstance(data_obj, dict):
+            for k in candidate_keys:
+                if isinstance(data_obj.get(k), list):
+                    items_path = ["data", k]
+                    break
+        elif isinstance(data_obj, list):
+            items_path = ["data"]
+
+    if items_path is None:
+        # Couldn't find a list — just hard-truncate. Better than
+        # breaking JSON.
+        return serialized[:max_chars] + f"\n…(总长 {len(serialized)} 字符，已截断)"
+
+    # Walk into the list and drop trailing items.
+    node: Any = truncated
+    for key in items_path[:-1]:
+        node = node[key]
+    items_key = items_path[-1]
+    items: list[Any] = node[items_key]
+
+    while items and len(serialized) > max_chars:
+        items.pop()
+        serialized = json.dumps(truncated, ensure_ascii=False)
+
+    if items:
+        serialized += f"\n…(还有 {len(items)} 条因字数预算被省略)"
+    return serialized
+
 
 async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
     """Stream the final natural-language answer to the user."""
@@ -121,10 +237,14 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
 
     yield {"event": "summary_start", "data": {}}
 
+    # Allow override via env (handy when debugging truncation on prod).
+    max_chars = int(os.environ.get("SYNTH_MAX_RESULT_CHARS", MAX_RESULT_CHARS))
+    max_item = int(os.environ.get("SYNTH_MAX_ITEM_CHARS", MAX_ITEM_TEXT_CHARS))
+
     results_text = "\n\n".join(
         f"### Skill: {c['name']}\nArgs: {json.dumps(c.get('args', {}), ensure_ascii=False)}\n"
         f"OK: {c.get('ok')}  Duration: {c.get('duration_ms')}ms\n"
-        f"Result: {json.dumps(c.get('result'), ensure_ascii=False)[:3000]}"
+        f"Result: {_truncate_result_for_prompt(c.get('result'), max_chars, max_item)}"
         for c in calls
     )
 
