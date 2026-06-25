@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 SKILL_LOCAL_NAME = "report-search"
 SKILL_PLATFORM_NAME = "report-search"
-SKILL_VERSION = "2.0.0"
+SKILL_VERSION = "1.0.0"  # must match Skills/report-search/SKILL.md frontmatter
 DEFAULT_API_URL = "https://openapi.iwencai.com/v1/comprehensive/search"
 
 

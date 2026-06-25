@@ -1,7 +1,7 @@
 ---
 name: financial-query
 displayName: 金融数据查询
-description: 金融结构化数据统一查询入口。通过同花顺问财 OpenAPI `query2data` 端点，用自然语言查询 A 股 / 港股 / 美股 / 基金 / 期货 / ETF / 行业 / 板块 / 概念 / 指数 等全市场金融结构化数据，覆盖行情 / 估值 / 财务 / 事件 / 资金流向 / 板块涨跌 / 龙虎榜 / 研报关键指标 / 宏观经济 等所有需要"查询某个标的的某个数字/字段"的问题。当用户询问**具体某个股票/基金/指数/板块/期货的指标、行情、财务、估值、事件、新闻摘要中的数字部分**时，**必须优先使用本 skill**。新闻/公告/研报全文等纯文本类查询走 `news-search` / `announcement-search` / `report-search`。
+description: 金融结构化数据统一查询入口。通过同花顺问财 OpenAPI `query2data` 端点，用自然语言查询A股、指数、港股、美股、基金、ETF、期货、宏观、可转债等全市场金融结构化数据，支持行情指标、技术形态、财务指标、行业概念等多条件组合筛选标的，同时支持事件数据、经营数据、财务数据等查询。新闻/公告/研报全文等纯文本类查询走 `news-search` / `announcement-search` / `report-search`这几个SKill。
 license: Complete terms in LICENSE.txt
 ---
 
