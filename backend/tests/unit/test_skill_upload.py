@@ -105,17 +105,23 @@ def test_happy_path():
 
 # ----------------- shape validation -----------------
 
-def test_zip_with_no_top_dir():
-    """Zip containing only loose files (no top-level dir) is rejected."""
+def test_flat_zip_with_stray_py_installs_as_prompt_only():
+    """Flat zip (SKILL.md at root) with an extra .py is accepted and
+    installed as a prompt-only skill — the stray .py is just ignored,
+    same as any other ancillary file. Mismatched-filename rejection
+    only applies in the directory layout, where a stray .py is much
+    more likely to be a real handler typo."""
     blob = _make_zip_bytes(
-        {"SKILL.md": VALID_SKILL_MD, f"{TEST_SKILL_NAME}.py": VALID_HANDLER}
+        {"SKILL.md": VALID_SKILL_MD, "unrelated.py": "x = 1\n"}
     )
-    with pytest.raises(ValueError, match="exactly one top-level directory"):
-        user_uploads.install_skill_from_zip(blob)
+    result = user_uploads.install_skill_from_zip(blob)
+    assert result["kind"] == "prompt"
+    assert result["name"] == TEST_SKILL_NAME
 
 
 def test_zip_with_two_top_dirs():
-    """Zip with two top-level dirs is rejected."""
+    """Zip with two top-level dirs, each with its own SKILL.md, is
+    rejected because we can't tell which one is the skill."""
     blob = _make_zip_bytes(
         {
             "alpha/SKILL.md": "---\nname: alpha\n---\n",
@@ -124,7 +130,7 @@ def test_zip_with_two_top_dirs():
             "beta/beta.py": VALID_HANDLER.replace(TEST_SKILL_NAME, "beta"),
         }
     )
-    with pytest.raises(ValueError, match="exactly one top-level directory"):
+    with pytest.raises(ValueError, match="Multiple SKILL.md"):
         user_uploads.install_skill_from_zip(blob)
 
 
@@ -229,14 +235,17 @@ def test_no_register_call_rolls_back():
 
 
 def test_handler_filename_must_match_dir():
-    """The handler filename must match the top-level directory name."""
+    """The handler filename must match the top-level directory name —
+    if a .py exists but is misnamed, we reject the upload (rather than
+    silently demoting to a prompt-only skill, which would hide a real
+    typo from the user)."""
     blob = _make_zip_bytes(
         {
             f"{TEST_SKILL_NAME}/SKILL.md": VALID_SKILL_MD,
             f"{TEST_SKILL_NAME}/wrong_name.py": VALID_HANDLER,
         }
     )
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises(ValueError, match="must be named"):
         user_uploads.install_skill_from_zip(blob)
 
 

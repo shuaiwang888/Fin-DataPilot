@@ -104,7 +104,10 @@ export function SkillManagerDrawer() {
               {uploading ? "正在安装…" : "点击或拖入 .zip 文件上传新 Skill"}
             </p>
             <p className="ant-upload-hint" style={{ fontSize: 12, color: "#999" }}>
-              zip 须含一个顶层目录，里面放 SKILL.md + 同名 .py handler（≤ 20 MB）
+              支持两种 zip：<br />
+              • <b>代码 skill</b>：顶层目录 + SKILL.md + 同名 .py handler<br />
+              • <b>知识 skill</b>：仅一个 SKILL.md（frontmatter 含 name + description）<br />
+              （≤ 20 MB）
             </p>
           </Dragger>
 
@@ -129,7 +132,8 @@ export function SkillManagerDrawer() {
                     </Tag>
                     <Tag color="blue">{s.spec.category}</Tag>
                     <Tag>v{s.spec.version}</Tag>
-                    {s.uploaded && <Tag color="purple">用户上传</Tag>}
+                    {s.kind === "prompt" && <Tag color="cyan">知识注入</Tag>}
+                    {s.kind === "code" && <Tag color="purple">用户代码</Tag>}
                   </div>
                   <Space size={4}>
                     {s.uploaded && (
@@ -151,14 +155,16 @@ export function SkillManagerDrawer() {
                   </Space>
                 </div>
                 <div style={{ color: "#666", fontSize: 12, marginBottom: 8 }}>{s.spec.description}</div>
-                <div style={{ fontSize: 12, color: "#999", marginBottom: 8 }}>
-                  <strong>参数：</strong>
-                  {s.spec.parameters.map((p) => (
-                    <Tag key={p.name} color={p.required ? "red" : "default"} style={{ marginBottom: 4 }}>
-                      {p.name}{!p.required && "?"}: {p.type}
-                    </Tag>
-                  ))}
-                </div>
+                {s.spec.parameters.length > 0 && (
+                  <div style={{ fontSize: 12, color: "#999", marginBottom: 8 }}>
+                    <strong>参数：</strong>
+                    {s.spec.parameters.map((p) => (
+                      <Tag key={p.name} color={p.required ? "red" : "default"} style={{ marginBottom: 4 }}>
+                        {p.name}{!p.required && "?"}: {p.type}
+                      </Tag>
+                    ))}
+                  </div>
+                )}
                 {s.spec.requires.length > 0 && (
                   <div style={{ fontSize: 12, marginBottom: 8 }}>
                     {(() => {
@@ -180,7 +186,7 @@ export function SkillManagerDrawer() {
                     })()}
                   </div>
                 )}
-                {s.enabled && (
+                {s.enabled && s.spec.parameters.length > 0 && (
                   <Form size="small" layout="inline" style={{ marginTop: 8 }}>
                     {s.spec.parameters.map((p) => (
                       <Form.Item
@@ -208,6 +214,15 @@ export function SkillManagerDrawer() {
                       测试调用
                     </Button>
                   </Form>
+                )}
+                {s.kind === "prompt" && (
+                  <Button
+                    size="small"
+                    style={{ marginTop: 8 }}
+                    onClick={() => handleDebug(s)}
+                  >
+                    查看 prompt 内容
+                  </Button>
                 )}
                 {debugResult[s.spec.name] !== undefined && (
                   <pre

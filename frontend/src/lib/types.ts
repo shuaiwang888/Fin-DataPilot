@@ -23,6 +23,8 @@ export interface SkillItem {
   requirements_met?: Record<string, boolean>;
   /** True if the skill was uploaded at runtime (can be deleted). */
   uploaded?: boolean;
+  /** Distinguishes prompt-only from code uploads (and built-ins). */
+  kind?: "code" | "prompt" | "builtin";
 }
 
 export interface Session {

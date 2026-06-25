@@ -45,6 +45,15 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         }
     result = last.get("result") or {}
     data = result.get("data") or {}
+    # Prompt-only skills return a SKILL.md body under data.skill_body —
+    # not a list of rows. They never need another tool call; the
+    # synthesizer can already see this content in the system prompt
+    # context, so we short-circuit the empty-data heuristic.
+    if isinstance(data, dict) and data.get("skill_body"):
+        return {
+            "reflection_verdict": "sufficient",
+            "reflection": "prompt-only skill: body is already in context",
+        }
     # Heuristic: zero results → need_more (LLM may rewrite the query)
     rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
     if not rows and not data:

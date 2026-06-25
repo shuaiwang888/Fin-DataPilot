@@ -29,8 +29,10 @@ def _is_env_configured(name: str) -> bool:
 @router.get("/skills")
 async def list_skills() -> dict:
     """List all registered skills, with enabled/disabled state, runtime
-    env status, and an `uploaded` flag distinguishing user-uploaded
-    skills (which can be deleted) from built-ins (which cannot)."""
+    env status, an `uploaded` flag distinguishing user-uploaded skills
+    (which can be deleted) from built-ins (which cannot), and a `kind`
+    field ("code" / "prompt" / "builtin") so the UI can render
+    prompt-only skills differently."""
     settings = get_settings()
     user_root = settings.user_skills_dir
     return {
@@ -42,10 +44,21 @@ async def list_skills() -> dict:
                     env: _is_env_configured(env) for env in s.requires
                 },
                 "uploaded": os.path.isdir(os.path.join(user_root, s.name)),
+                "kind": _classify_kind(s.name, user_root),
             }
             for s in REGISTRY.list_specs()
         ]
     }
+
+
+def _classify_kind(name: str, user_root: str) -> str:
+    """Return "builtin", "code" (uploaded with a .py), or "prompt"
+    (uploaded with only SKILL.md)."""
+    skill_dir = os.path.join(user_root, name)
+    if not os.path.isdir(skill_dir):
+        return "builtin"
+    has_py = os.path.isfile(os.path.join(skill_dir, f"{name}.py"))
+    return "code" if has_py else "prompt"
 
 
 class SkillToggleRequest(BaseModel):

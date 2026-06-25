@@ -9,12 +9,21 @@ from app.skills.base import Handler, ToolResult, ToolSpec
 
 logger = logging.getLogger(__name__)
 
+# Cap on how much of a prompt-only skill's body we surface in the
+# LLM's system prompt. Keeps a single huge SKILL.md from blowing the
+# context window for every chat turn. 4000 chars ~ 1000 CJK tokens.
+MAX_PROMPT_BODY_CHARS = 4000
+
 
 class ToolRegistry:
     def __init__(self) -> None:
         self._specs: dict[str, ToolSpec] = {}
         self._handlers: dict[str, Handler] = {}
         self._enabled: dict[str, bool] = {}
+        # Per-skill prompt body, set by user_uploads for prompt-only
+        # skills. Used by to_prompt_text() to inject domain knowledge
+        # into the LLM's system prompt.
+        self._prompt_bodies: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     # ----- registration -----
@@ -30,6 +39,19 @@ class ToolRegistry:
         self._specs.pop(name, None)
         self._handlers.pop(name, None)
         self._enabled.pop(name, None)
+        self._prompt_bodies.pop(name, None)
+
+    # ----- prompt body (for prompt-only skills) -----
+    def set_prompt_body(self, name: str, body: str | None) -> None:
+        """Set or clear the prompt body for a skill. Called by
+        user_uploads during install/uninstall; consumed by to_prompt_text."""
+        if body is None:
+            self._prompt_bodies.pop(name, None)
+        else:
+            self._prompt_bodies[name] = body
+
+    def get_prompt_body(self, name: str) -> str | None:
+        return self._prompt_bodies.get(name)
 
     # ----- queries -----
     def list_specs(self) -> list[ToolSpec]:
@@ -59,13 +81,34 @@ class ToolRegistry:
         return [s.to_openai_tool() for s in self.enabled_specs()]
 
     def to_prompt_text(self) -> str:
-        """Human-readable summary injected into the LLM system prompt."""
+        """Human-readable summary injected into the LLM system prompt.
+
+        For code skills (those with parameters) we render a one-line
+        per-skill entry — the LLM can call them via tool_call if it
+        wants the real data. For prompt-only skills (parameters==[])
+        with a stored body, we surface the full body so the LLM has
+        the domain knowledge in its context. Bodies are truncated at
+        MAX_PROMPT_BODY_CHARS to keep the system prompt bounded.
+        """
         lines: list[str] = []
         for s in self.enabled_specs():
             params = ", ".join(
                 f"{p.name}{'' if p.required else '?'}: {p.type}" for p in s.parameters
             )
-            lines.append(f"- {s.name}({params}) — {s.description}")
+            if params:
+                lines.append(f"- {s.name}({params}) — {s.description}")
+            else:
+                body = self._prompt_bodies.get(s.name)
+                if body:
+                    truncated = body if len(body) <= MAX_PROMPT_BODY_CHARS else (
+                        body[:MAX_PROMPT_BODY_CHARS] + "\n…(已截断)"
+                    )
+                    lines.append(
+                        f"- {s.name} (knowledge) — {s.description}\n{truncated}"
+                    )
+                else:
+                    # Fallback: spec-only entry (no body registered)
+                    lines.append(f"- {s.name} — {s.description}")
         return "\n".join(lines)
 
     def to_introspection(self) -> list[dict[str, Any]]:
