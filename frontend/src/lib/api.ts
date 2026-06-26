@@ -58,13 +58,14 @@ export const api = {
   },
   /** Delete an uploaded skill. Throws on built-in skills (400). */
   deleteSkill: (name: string) => del<{ deleted: string }>(`/api/skills/${name}`),
-  listSessions: () => http<{ sessions: Session[] }>("/api/sessions"),
+  listSessions: (signal?: AbortSignal) => http<{ sessions: Session[] }>("/api/sessions", { signal }),
   createSession: (title: string) =>
     http<{ id: string; title: string; created_at: string }>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
-  getSession: (id: string) => http<{ session: Session; messages: Message[] }>(`/api/sessions/${id}`),
+  getSession: (id: string, signal?: AbortSignal) =>
+    http<{ session: Session; messages: Message[] }>(`/api/sessions/${id}`, { signal }),
   patchSession: (id: string, title: string) =>
     http<{ id: string; title: string }>(`/api/sessions/${id}`, {
       method: "PATCH",

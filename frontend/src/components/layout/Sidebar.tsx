@@ -13,68 +13,116 @@ import { useSkillStore } from "../../stores/skillStore";
 import { api } from "../../lib/api";
 
 export function Sidebar() {
-  const sessions = useSessionStore();
-  const chat = useChatStore();
-  const skills = useSkillStore();
+  // Selector-based subscriptions so streaming token updates (which
+  // mutate chatStore.messages / pendingText every frame) don't
+  // re-render the entire session list. Previously `useChatStore()`
+  // pulled the whole object, causing 30+ <List.Item> nodes to
+  // re-render on every token.
+  const sessions = useSessionStore((s) => s.sessions);
+  const activeId = useSessionStore((s) => s.activeId);
+  const setActive = useSessionStore((s) => s.setActive);
+  const setSessions = useSessionStore((s) => s.setSessions);
+  const removeSession = useSessionStore((s) => s.remove);
+  const renameSession = useSessionStore((s) => s.rename);
+
+  // chatStore: only the actions + the id, not the streaming state.
+  // Each subscription is a separate selector call so each one is
+  // compared with Object.is against the previous value — actions
+  // are stable references from zustand, sessionId is a primitive.
+  const chatSessionId = useChatStore((s) => s.sessionId);
+  const chatSetSession = useChatStore((s) => s.setSession);
+  const chatSetMessages = useChatStore((s) => s.setMessages);
+  const chatReset = useChatStore((s) => s.reset);
+
+  const skillEnabled = useSkillStore((s) => s.skills.filter((x) => x.enabled).length);
+  const skillTotal = useSkillStore((s) => s.skills.length);
+  const openSkillDrawer = useSkillStore((s) => s.setDrawerOpen);
+
   const { message } = App.useApp();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
 
   useEffect(() => {
+    // Race guard: if Sidebar unmounts (e.g. test cleanup, future
+    // routing) or a faster re-mount races the first request,
+    // abort the in-flight list/getSession calls.
+    const ctrl = new AbortController();
     (async () => {
       try {
-        const r = await api.listSessions();
-        sessions.setSessions(r.sessions);
+        const r = await api.listSessions(ctrl.signal);
+        setSessions(r.sessions);
         // On page load, if the user has past conversations, auto-select
         // the most recent one and load its messages so the page
         // refresh doesn't wipe their history.
-        if (r.sessions.length > 0 && !sessions.activeId && !chat.sessionId) {
+        const currentChatId = useChatStore.getState().sessionId;
+        if (r.sessions.length > 0 && !useSessionStore.getState().activeId && !currentChatId) {
           const mostRecent = r.sessions[0];
-          sessions.setActive(mostRecent.id);
-          chat.setSession(mostRecent.id);
+          setActive(mostRecent.id);
+          chatSetSession(mostRecent.id);
           try {
-            const detail = await api.getSession(mostRecent.id);
-            chat.setMessages(detail.messages);
-          } catch {
-            /* non-fatal */
+            const detail = await api.getSession(mostRecent.id, ctrl.signal);
+            chatSetMessages(detail.messages);
+          } catch (e) {
+            if ((e as Error)?.name !== "AbortError") {
+              /* non-fatal */
+            }
           }
         }
-      } catch {
-        /* offline / not yet deployed; ignore */
+      } catch (e) {
+        if ((e as Error)?.name !== "AbortError") {
+          /* offline / not yet deployed; ignore */
+        }
       }
     })();
+    return () => ctrl.abort();
+    // We intentionally only run this on mount. Selector-returned
+    // action functions are stable references from zustand.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleNew = async () => {
-    chat.reset();
-    sessions.setActive(null);
+    chatReset();
+    setActive(null);
   };
 
   const handleSelect = async (id: string) => {
-    if (sessions.activeId === id) return;
-    sessions.setActive(id);
-    chat.setSession(id);
+    if (activeId === id) return;
+    // setSession will internally call _abortInflight, which tears
+    // down any in-flight SSE for the previous session. This is the
+    // primary fix for the "click a session and the old stream keeps
+    // writing into the new one" bug.
+    setActive(id);
+    chatSetSession(id);
+    const ctrl = new AbortController();
     try {
-      const r = await api.getSession(id);
-      chat.setMessages(r.messages);
+      const r = await api.getSession(id, ctrl.signal);
+      chatSetMessages(r.messages);
     } catch (e) {
-      console.error(e);
+      if ((e as Error)?.name !== "AbortError") {
+        console.error(e);
+      }
     }
+    // Hold a ref to ctrl so we could abort on unmount, but in practice
+    // the click handler's await finishes within a few hundred ms;
+    // a hot switch to yet another session will set sessionId again,
+    // and the for-await sessionId-guard in useChatStream handles
+    // the SSE half. The HTTP half is short-lived and self-contained.
+    void ctrl;
   };
 
   const handleDelete = async (id: string) => {
     await api.deleteSession(id);
-    sessions.remove(id);
-    if (sessions.activeId === id) {
-      chat.reset();
+    removeSession(id);
+    if (activeId === id) {
+      chatReset();
     }
   };
 
   const handleClearAll = async () => {
     try {
       const r = await api.deleteAllSessions();
-      sessions.setSessions([]);
-      chat.reset();
+      setSessions([]);
+      chatReset();
       message.success(`已清空 ${r.deleted} 条对话历史`);
     } catch (e) {
       message.error("清空失败：" + (e as Error).message);
@@ -84,7 +132,7 @@ export function Sidebar() {
   const handleRename = async (id: string) => {
     if (!editingTitle.trim()) return;
     await api.patchSession(id, editingTitle.trim());
-    sessions.rename(id, editingTitle.trim());
+    renameSession(id, editingTitle.trim());
     setEditingId(null);
   };
 
@@ -103,14 +151,14 @@ export function Sidebar() {
       </div>
       <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
         <List
-          dataSource={sessions.sessions}
+          dataSource={sessions}
           locale={{ emptyText: <div style={{ color: "#bbb", textAlign: "center", padding: 24 }}>暂无对话</div> }}
           renderItem={(s) => (
             <List.Item
               style={{
                 padding: "8px 12px",
                 cursor: "pointer",
-                background: sessions.activeId === s.id ? "#e6f4ff" : undefined,
+                background: activeId === s.id ? "#e6f4ff" : undefined,
                 border: "none",
               }}
               onClick={() => editingId !== s.id && handleSelect(s.id)}
@@ -184,11 +232,11 @@ export function Sidebar() {
         <Button
           block
           icon={<AppstoreOutlined />}
-          onClick={() => skills.setDrawerOpen(true)}
+          onClick={() => openSkillDrawer(true)}
         >
-          Skill 管理 ({skills.skills.filter((s) => s.enabled).length}/{skills.skills.length})
+          Skill 管理 ({skillEnabled}/{skillTotal})
         </Button>
-        {sessions.sessions.length > 0 && (
+        {sessions.length > 0 && (
           <Popconfirm
             title="清空全部对话历史？"
             description="此操作不可撤销，所有对话将被永久删除。"

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useChatStore } from "../stores/chatStore";
 import type { ChatMessage, ThinkingStep } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
@@ -56,12 +56,33 @@ export function useChatStream() {
 
       const url = `${API_BASE}/api/agent/chat/stream`;
       let newSessionId: string | null = null;
+      // Snapshot the session id at the moment the request was sent.
+      // The server may mint a new id (then a `session` event arrives
+      // and updates the store); until then, every event we receive
+      // belongs to this snapshot. If the store's sessionId changes
+      // for any OTHER reason — user clicked another session, hit
+      // "新对话", etc. — we break out so late events from this stream
+      // can't pollute the new session's messages.
+      const requestSessionId = useChatStore.getState().sessionId;
       try {
         for await (const ev of streamChat(
           url,
           { query, session_id: chat.sessionId },
           controller.signal,
         )) {
+          // Guard: did the active session change under us? If so, the
+          // user (or _abortInflight) has moved on — drop the event.
+          // The `session` event is special: it's the server telling
+          // us the id it minted, so that's the ONLY event allowed to
+          // change sessionId from null to a real value.
+          if (ev.event !== "session") {
+            const current = useChatStore.getState().sessionId;
+            if (current !== requestSessionId) {
+              // session was switched under us; bail out cleanly
+              controller.abort();
+              break;
+            }
+          }
           if (ev.event === "session") {
             newSessionId = ev.data.session_id;
             // Server just minted a new session — keep the optimistic UI
@@ -339,8 +360,30 @@ export function useChatStream() {
   const stop = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort();
+      // Synchronously finalize any in-flight assistant message so the
+      // UI doesn't show a "loading" state for the now-dead stream.
+      // finalizeAssistant is idempotent — if message_final already
+      // ran (no longer streaming), this is a no-op.
+      useChatStore.getState().finalizeAssistant();
+      abortRef.current = null;
     }
   }, []);
+
+  // Register/unregister this hook's stop() as the store's abort hook.
+  // Any setSession/reset call with a different id will trigger it,
+  // which is what makes "click a different session" actually tear
+  // down the old stream.
+  useEffect(() => {
+    useChatStore.setState({ _abortInflight: stop });
+    return () => {
+      // Unregister on unmount to avoid a stale stop() being called
+      // by a later session switch.
+      const current = useChatStore.getState()._abortInflight;
+      if (current === stop) {
+        useChatStore.setState({ _abortInflight: () => {} });
+      }
+    };
+  }, [stop]);
 
   return { send, stop, streaming: chat.streaming };
 }

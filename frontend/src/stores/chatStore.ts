@@ -38,9 +38,19 @@ interface ChatState {
    *  Used by ThinkingPanel to auto-collapse once the answer is flowing. */
   answerStarted: boolean;
 
+  /** Internal: set by useChatStream when the hook mounts, so the store
+   *  can abort the in-flight SSE whenever the active session changes.
+   *  UI code MUST NOT call this directly — it's a back-channel from
+   *  the stream hook to the store, used by setSession/reset to make
+   *  "switch to another session" tear down the old stream.
+   *  No-op until useChatStream registers. */
+  _abortInflight: () => void;
+
   /** Update the active session id. By default also clears messages; pass
    *  `{ clearMessages: false }` to keep the optimistic UI bubbles (used
-   *  when the server hands us a freshly-created session id mid-stream). */
+   *  when the server hands us a freshly-created session id mid-stream).
+   *  When the id actually changes, the in-flight SSE is aborted first so
+   *  late events from the old stream can't pollute the new session. */
   setSession: (id: string | null, opts?: { clearMessages?: boolean }) => void;
   appendUser: (text: string) => string;
   appendAssistant: () => string;
@@ -62,9 +72,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streaming: false,
   pendingText: "",
   answerStarted: false,
+  // Registered by useChatStream; no-op until then.
+  _abortInflight: () => {},
 
   setSession: (id, opts) => {
     const clearMessages = opts?.clearMessages !== false;
+    const { sessionId: prevId, _abortInflight } = get();
+    // Tear down the in-flight stream when the active session actually
+    // changes. This is the key fix for "click a different session and
+    // the old stream's late events keep writing into the new one".
+    if (prevId !== id) {
+      _abortInflight();
+    }
     if (clearMessages) {
       set({
         sessionId: id,
@@ -179,12 +198,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  reset: () =>
+  reset: () => {
+    // New-conversation button path: also tear down any in-flight stream.
+    get()._abortInflight();
     set({
       sessionId: null,
       messages: [],
       pendingText: "",
       streaming: false,
       answerStarted: false,
-    }),
+    });
+  },
 }));
