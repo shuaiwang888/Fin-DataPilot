@@ -49,9 +49,19 @@ interface ChatState {
   /** Update the active session id. By default also clears messages; pass
    *  `{ clearMessages: false }` to keep the optimistic UI bubbles (used
    *  when the server hands us a freshly-created session id mid-stream).
-   *  When the id actually changes, the in-flight SSE is aborted first so
-   *  late events from the old stream can't pollute the new session. */
-  setSession: (id: string | null, opts?: { clearMessages?: boolean }) => void;
+   *
+   *  `cause`:
+   *    - "user"  (default): caller is the UI switching to a different
+   *        session. When `id` actually changes, the in-flight SSE is
+   *        aborted first so late events from the old stream can't
+   *        pollute the new session.
+   *    - "server": caller is useChatStream propagating the session id
+   *        that the server just minted. The in-flight SSE MUST NOT be
+   *        aborted here — this IS that stream, telling us its id. */
+  setSession: (
+    id: string | null,
+    opts?: { clearMessages?: boolean; cause?: "user" | "server" }
+  ) => void;
   appendUser: (text: string) => string;
   appendAssistant: () => string;
   appendThinking: (step: ThinkingStep) => void;
@@ -77,11 +87,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setSession: (id, opts) => {
     const clearMessages = opts?.clearMessages !== false;
+    const cause = opts?.cause ?? "user";
     const { sessionId: prevId, _abortInflight } = get();
     // Tear down the in-flight stream when the active session actually
-    // changes. This is the key fix for "click a different session and
-    // the old stream's late events keep writing into the new one".
-    if (prevId !== id) {
+    // changes — but ONLY when the change is user-driven. The server's
+    // `session` event is the stream itself telling us its id, so
+    // aborting it would kill the very stream we're trying to listen
+    // to (this was the bug: new-conversation's first query got
+    // immediately aborted because the server minted a fresh id).
+    if (cause === "user" && prevId !== id) {
       _abortInflight();
     }
     if (clearMessages) {

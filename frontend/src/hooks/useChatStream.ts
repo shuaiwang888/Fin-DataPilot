@@ -88,7 +88,17 @@ export function useChatStream() {
             // Server just minted a new session — keep the optimistic UI
             // bubbles (user + assistant) we already rendered. Only update
             // the sessionId reference, don't wipe messages.
-            chat.setSession(newSessionId, { clearMessages: false });
+            // IMPORTANT: cause: "server" tells chatStore NOT to abort
+            // the in-flight SSE. This event IS from the current stream
+            // telling us its id; aborting here would kill the very
+            // stream we're listening to (the bug: new-conversation's
+            // first query was immediately aborted because the server
+            // minted a fresh id and setSession treated it as a "user
+            // switched sessions" signal).
+            chat.setSession(newSessionId, {
+              clearMessages: false,
+              cause: "server",
+            });
             sessions.setActive(newSessionId);
             // Refresh sidebar session list (best effort)
             api.listSessions().then((r) => sessions.setSessions(r.sessions)).catch(() => {});
