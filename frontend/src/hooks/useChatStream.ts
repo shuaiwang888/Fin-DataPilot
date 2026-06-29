@@ -56,14 +56,13 @@ export function useChatStream() {
 
       const url = `${API_BASE}/api/agent/chat/stream`;
       let newSessionId: string | null = null;
-      // Snapshot the session id at the moment the request was sent.
-      // The server may mint a new id (then a `session` event arrives
-      // and updates the store); until then, every event we receive
-      // belongs to this snapshot. If the store's sessionId changes
-      // for any OTHER reason — user clicked another session, hit
-      // "新对话", etc. — we break out so late events from this stream
-      // can't pollute the new session's messages.
-      const requestSessionId = useChatStore.getState().sessionId;
+      // The id we expect to see in the store while this stream is the
+      // active one. Starts as the id at request time, then gets
+      // updated when the server's `session` event mints a fresh id
+      // (the new-conversation case). When the user clicks another
+      // session mid-stream, the store's sessionId changes for a
+      // DIFFERENT reason and no longer matches — that's when we bail.
+      let requestSessionId = useChatStore.getState().sessionId;
       try {
         for await (const ev of streamChat(
           url,
@@ -99,6 +98,13 @@ export function useChatStream() {
               clearMessages: false,
               cause: "server",
             });
+            // Keep the guard's reference in sync — once we've seen
+            // the server's id, subsequent events (token_delta etc.)
+            // legitimately belong to it. Without this sync, every
+            // event after `session` would see current = newId vs.
+            // requestSessionId = null and bail out — killing the
+            // stream right after it announces its id.
+            requestSessionId = newSessionId;
             sessions.setActive(newSessionId);
             // Refresh sidebar session list (best effort)
             api.listSessions().then((r) => sessions.setSessions(r.sessions)).catch(() => {});
