@@ -44,17 +44,36 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
             "reflection": f"工具调用失败: {last.get('error')}",
         }
     result = last.get("result") or {}
-    data = result.get("data") or {}
+    data = result.get("data")
+    # A skill may legitimately return a string (e.g. anysearch `extract`
+    # returns Markdown, or anysearch `search` returns Markdown when the
+    # CLI's output isn't JSON). Coerce to a dict for the row-counting
+    # heuristic so we don't crash on `str.get(...)`.
+    if isinstance(data, str):
+        # Non-empty text IS the answer — short-circuit and skip the LLM
+        # reflection round-trip. Empty string = "no results", same as
+        # the empty-list case below.
+        if data.strip():
+            return {
+                "reflection_verdict": "sufficient",
+                "reflection": f"skill returned {len(data):,} chars of text",
+            }
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
     # Prompt-only skills return a SKILL.md body under data.skill_body —
     # not a list of rows. They never need another tool call; the
     # synthesizer can already see this content in the system prompt
     # context, so we short-circuit the empty-data heuristic.
-    if isinstance(data, dict) and data.get("skill_body"):
+    if data.get("skill_body"):
         return {
             "reflection_verdict": "sufficient",
             "reflection": "prompt-only skill: body is already in context",
         }
-    # Heuristic: zero results → need_more (LLM may rewrite the query)
+    # Heuristic: zero results → need_more (LLM may rewrite the query).
+    # If the skill returned free-form text (e.g. anysearch Markdown),
+    # any non-empty text counts as "has data" — we don't try to count
+    # rows we don't know about.
     rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
     if not rows and not data:
         return {
