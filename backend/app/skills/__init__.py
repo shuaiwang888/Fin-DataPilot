@@ -21,6 +21,7 @@ from app.skills import (  # noqa: F401
     news_search,
     announcement_search,
     report_search,
+    anysearch,  # bundled web/vertical search; silently no-ops if not installed
 )
 
 __all__ = ["REGISTRY", "ToolSpec", "ToolResult", "ToolParameter", "Handler", "timed"]

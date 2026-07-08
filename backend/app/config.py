@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     # Protects against zip bombs.
     max_skill_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
 
+    # ===== AnySearch (self-hosted web/vertical search skill) =====
+    # Path to the unpacked anysearch-skill/ directory. The backend
+    # shells out to <dir>/scripts/anysearch_cli.py (Python) — that CLI
+    # reads .env + runtime.conf from this directory on its own.
+    # Override to point at a different install location; default
+    # resolves relative to the project root (../../Skills/anysearch-skill
+    # from the backend/ working dir).
+    anysearch_skill_dir: str = ""
+    anysearch_timeout: int = 30  # seconds; CLI subprocess timeout
+    anysearch_api_key: str = ""  # optional; if empty, anonymous (lower rate limits)
+
     # ===== Session retention =====
     # Per-user cap on stored sessions. When a new session is created
     # and the user already has this many, the OLDEST session (by
@@ -185,6 +196,33 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.data_pilot_env == "production"
+
+    @property
+    def anysearch_dir(self) -> str:
+        """Resolve the on-disk path of the bundled anysearch-skill/.
+
+        Resolution order:
+          1. `anysearch_skill_dir` env (any-search-skill-path=…) if set
+             and exists — use it as-is.
+          2. <project_root>/Skills/anysearch-skill — the canonical
+             install location tracked in the repo.
+          3. <cwd>/Skills/anysearch-skill — fallback when the backend
+             is started from the project root.
+
+        Returns "" if no candidate exists (the skill should then refuse
+        to register / dispatch with a clear error).
+        """
+        if self.anysearch_skill_dir and Path(self.anysearch_skill_dir).is_dir():
+            return str(Path(self.anysearch_skill_dir).resolve())
+        # backend/ lives at <project_root>/backend; the skill is at
+        # <project_root>/Skills/anysearch-skill. So go up one level.
+        for candidate in (
+            Path(__file__).resolve().parents[2] / "Skills" / "anysearch-skill",
+            Path.cwd() / "Skills" / "anysearch-skill",
+        ):
+            if candidate.is_dir():
+                return str(candidate.resolve())
+        return ""
 
     @property
     def has_real_llm_key(self) -> bool:

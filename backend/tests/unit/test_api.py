@@ -18,8 +18,11 @@ async def test_health(client) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
-    assert body["tools"]["count"] == 4
+    # 4 built-in iWencai skills + 1 bundled anysearch-skill (loaded
+    # automatically from Skills/anysearch-skill/ when present).
+    assert body["tools"]["count"] == 5
     assert "financial-query" in body["tools"]["names"]
+    assert "anysearch" in body["tools"]["names"]
 
 
 async def test_list_skills(client) -> None:
