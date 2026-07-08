@@ -37,6 +37,13 @@ class AgentState(TypedDict, total=False):
     reflection: str
     reflection_verdict: Literal["sufficient", "need_more", "failed"]
     rounds_used: int
+    # next_skill_hint / next_args_hint are populated by the reflector
+    # when it decides the previous step didn't cover the question and
+    # consumed by the skill router on its next turn. They MUST be
+    # declared here — LangGraph drops undeclared keys from a
+    # TypedDict, which silently breaks the multi-step loop.
+    next_skill_hint: str | None
+    next_args_hint: dict[str, Any] | None
 
     # ---- outputs ----
     final_answer: str
