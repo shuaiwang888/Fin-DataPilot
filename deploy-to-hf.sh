@@ -120,19 +120,42 @@ git config user.name "Fin-DataPilot Deploy Bot"
 #   - HTTPS + token as fallback (set HF_TOKEN env var)
 if [[ -n "${HF_TOKEN:-}" ]]; then
   TOKEN="$HF_TOKEN"
+  # Mask the token in logs to avoid leaking the secret if the
+  # workflow log is publicly visible.
+  if [[ "${TOKEN}" == hf_* ]]; then
+    MASKED_TOKEN="hf_***${TOKEN: -6}"
+  else
+    MASKED_TOKEN="***"
+  fi
   HF_HTTPS_URL="https://oauth2:${TOKEN}@huggingface.co/spaces/appQQQ/FinDataPilot"
   git remote add "$HF_REMOTE" "$HF_HTTPS_URL"
-  echo "▶ Using HTTPS + token auth"
+  echo "▶ Using HTTPS + token auth (token: ${MASKED_TOKEN})"
 else
   git remote add "$HF_REMOTE" "git@hf.co:spaces/appQQQ/FinDataPilot"
   echo "▶ Using SSH (set HF_TOKEN to override)"
 fi
 
+# Helpful diagnostic if the push fails — git's default error is terse.
+git config --global advice.detachedHead false || true
+
 git add -A
 git commit -q -m "$MESSAGE"
 
 echo "▶ Pushing to $HF_REMOTE/$HF_BRANCH ..."
-git push -f "$HF_REMOTE" "$HF_BRANCH"
+# Capture both stdout + stderr; show the last 50 lines on failure so
+# the GH Actions log tells us *why* (auth? wrong path? rate limit?).
+set +e
+PUSH_OUTPUT="$(git push -f "$HF_REMOTE" "$HF_BRANCH" 2>&1)"
+PUSH_RC=$?
+set -e
+echo "$PUSH_OUTPUT" | tail -30
+if [[ $PUSH_RC -ne 0 ]]; then
+  echo ""
+  echo "✗ git push failed with exit code $PUSH_RC"
+  echo "  HF_TOKEN set: $(test -n "${HF_TOKEN:-}" && echo yes || echo no)"
+  echo "  Remote URL:   $(git remote get-url "$HF_REMOTE" | sed 's/oauth2:.*@/oauth2:***@/')"
+  exit $PUSH_RC
+fi
 
 echo
 echo "✓ Deployed. HF Space will rebuild (≈2-3 min)."

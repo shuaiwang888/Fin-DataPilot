@@ -40,6 +40,11 @@ jobs:
           echo "✓ deploy key installed"
 
       - name: Deploy
+        env:
+          # Pass HF_TOKEN through so deploy-to-hf.sh can use the HTTPS
+          # path when SSH isn't available. Either secret works on its
+          # own; if both are set, HF_TOKEN wins.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:7}"
