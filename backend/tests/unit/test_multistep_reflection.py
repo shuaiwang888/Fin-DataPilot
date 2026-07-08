@@ -18,7 +18,10 @@ from app.agent.nodes.skill_router import skill_router_node
 
 def _state_with_calls(calls: list[dict[str, Any]], **extra) -> dict:
     return {
-        "user_query": "涨停的股票中市值最大的那只最近的公告或研报",
+        # No 公告/研报/新闻 keywords so the deterministic pattern
+        # matcher doesn't short-circuit — these tests want to verify
+        # the LLM-driven path works.
+        "user_query": "找出市值最大的那家，并分析它的投资价值",
         "tool_calls": calls,
         "rounds_used": 0,
         "history": [],

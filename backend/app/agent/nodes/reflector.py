@@ -107,6 +107,33 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
             "reflection": "工具返回为空数据",
         }
 
+    # ---- Deterministic multi-step patterns ----
+    # These are common "list-of-N + ask-about-one-of-them" questions
+    # where the LLM reflector occasionally says "sufficient" because
+    # it sees the data is non-empty. Pattern-match BEFORE the LLM so
+    # the loop never gets stuck.
+    #
+    # Pattern A: "take the (top-1 | first | 涨停 | etc) and look up its
+    # 公告 / 研报 / 新闻 / 详情". Triggered when:
+    #   - last tool was financial-query returning a list
+    #   - user query mentions 公告 / 研报 / 新闻 / 详情 / 最新 / 动态
+    pattern_a_skill, pattern_a_args, pattern_a_row = _infer_followup_for_list_result(
+        last_call_name=last.get("name", ""),
+        user_query=user_query,
+        rows=rows,
+    )
+    if pattern_a_skill and pattern_a_args and pattern_a_row is not None:
+        return {
+            "reflection_verdict": "need_more",
+            "reflection": (
+                f"已取到 {len(rows)} 条结果，但用户问的是其中"
+                f"「{_row_label(pattern_a_row)}」的 {pattern_a_skill} 内容，"
+                f"需再调一次该 skill"
+            ),
+            "next_skill_hint": pattern_a_skill,
+            "next_args_hint": pattern_a_args,
+        }
+
     # Otherwise let the LLM decide — but give it the full multi-call
     # history (not just the latest), so it can recognize the "we got a
     # list of 50 stocks, now we need announcement data for the top one"
@@ -167,3 +194,161 @@ def _truncate(result: Any, max_chars: int) -> str:
     if len(s) <= max_chars:
         return s
     return s[:max_chars] + f"\n…(已截断，原 {len(s):,} chars)"
+
+
+# ---- Deterministic multi-step helpers ----------------------------------
+
+
+# Keywords that signal "user wants detail on a specific entity from the
+# list" — Chinese + English variants seen in real Fin-DataPilot traffic.
+_FOLLOWUP_KEYWORDS = (
+    # announcements
+    "公告", "公告内容", "公告全文", "近期公告", "最新公告", "披露",
+    # research
+    "研报", "研报内容", "研报观点", "研究报告", "研报全文", "深度研报",
+    "券商研报", "机构研报", "近期研报", "最新研报",
+    # news
+    "新闻", "最新新闻", "近期新闻", "新闻内容", "资讯", "快讯",
+    # generic "details"
+    "详情", "详细介绍", "基本信息", "公司概况", "资料", "动态",
+    "基本面", "财务", "经营", "业绩", "财报", "季报", "年报",
+    "近况", "近 30 天", "近30天", "近 7 天", "近7天", "近一年", "近 1 年",
+    "深度", "解读", "研判", "深度分析", "行业地位", "护城河",
+    "股东", "机构持仓", "前十大股东", "大股东",
+    # English (in case LLM feeds English content)
+    "announcement", "research", "report", "news", "details", "overview",
+    "latest", "recent", "details", "filings",
+)
+
+
+def _row_label(row: dict[str, Any]) -> str:
+    """Pretty-print a financial-query row for reflection text."""
+    name = row.get("股票简称") or row.get("name") or row.get("简称") or "未知"
+    code = row.get("股票代码") or row.get("code") or row.get("代码") or ""
+    if code:
+        return f"{name}({code})"
+    return name
+
+
+def _pick_top_row(rows: list[dict[str, Any]], user_query: str) -> dict[str, Any] | None:
+    """Pick the row the user is most likely asking about.
+
+    Heuristics, in order:
+      1. "市值最大/最高" → row with max 总市值 (or 市场总值 / market_cap)
+      2. "涨幅最大/最高" → row with max 涨跌幅
+      3. "最小/最低" → row with min
+      4. Otherwise → rows[0] (iWencai already sorts by relevance / default)
+    """
+    if not rows:
+        return None
+    q = (user_query or "").lower()
+
+    def _num(row: dict, *keys: str) -> float | None:
+        for k in keys:
+            v = row.get(k)
+            if v is None:
+                continue
+            try:
+                return float(str(v).replace(",", "").replace("%", ""))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    if any(k in user_query for k in ("市值最大", "市值最高", "市值第一", "最大市值")):
+        ranked = sorted(
+            rows,
+            key=lambda r: _num(r, "总市值", "A股市值", "总市值(亿元)", "market_cap") or 0.0,
+            reverse=True,
+        )
+        return ranked[0]
+    if any(k in user_query for k in ("市值最小", "市值最低", "最小市值")):
+        ranked = sorted(
+            rows,
+            key=lambda r: _num(r, "总市值", "A股市值", "总市值(亿元)", "market_cap") or 0.0,
+        )
+        return ranked[0]
+    if any(k in user_query for k in ("涨幅最大", "涨幅最高", "涨幅第一", "涨停", "涨最多")):
+        ranked = sorted(
+            rows,
+            key=lambda r: _num(r, "涨跌幅", "涨幅", "最新涨跌幅", "change_pct") or 0.0,
+            reverse=True,
+        )
+        return ranked[0]
+    if any(k in user_query for k in ("跌幅最大", "跌幅最深", "跌最多")):
+        ranked = sorted(
+            rows,
+            key=lambda r: _num(r, "涨跌幅", "涨幅", "最新涨跌幅", "change_pct") or 0.0,
+        )
+        return ranked[0]
+    # Default: iWencai usually pre-sorts by relevance / score, so [0]
+    # is the most relevant.
+    return rows[0]
+
+
+def _infer_followup_for_list_result(
+    *,
+    last_call_name: str,
+    user_query: str,
+    rows: list[dict[str, Any]],
+) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Return (skill, args, row) for the deterministic follow-up step,
+    or (None, None, None) if the pattern doesn't match.
+
+    Pattern: "list-of-N + ask-about-X's detail"
+    The follow-up skill is chosen by the keyword the user uses:
+      公告 / 披露 / 财务 / 业绩 / 财报 / 季报 / 股东 → announcement-search
+      研报 / 深度 / 解读 / 券商 → report-search
+      新闻 / 资讯 / 动态 / 近况 → news-search
+      else → announcement-search (most common "next step" after
+        financial-query)
+    """
+    if not rows or not isinstance(rows, list):
+        return (None, None, None)
+    # Only fire when the previous tool produced a list of stocks/entities
+    # (financial-query, news-search, etc). We don't want to chain
+    # search → search, or extract → search.
+    if last_call_name not in ("financial-query", "news-search", "announcement-search", "report-search"):
+        return (None, None, None)
+
+    q = user_query or ""
+    if not any(kw in q for kw in _FOLLOWUP_KEYWORDS):
+        return (None, None, None)
+
+    target_row = _pick_top_row(rows, q)
+    if not target_row:
+        return (None, None, None)
+
+    name = target_row.get("股票简称") or target_row.get("name") or target_row.get("简称") or ""
+    code = target_row.get("股票代码") or target_row.get("code") or target_row.get("代码") or ""
+    if not name and not code:
+        return (None, None, None)
+    query_term = " ".join(filter(None, [name, code]))
+
+    # Decide which skill to call next. Priority: 公告 > 研报 > 新闻
+    # because for "X 的公告或研报" the user typically wants 公告 first
+    # (more immediate, more concrete). We check announcement FIRST so
+    # that "公告或研报" routes to announcement-search.
+    if any(kw in q for kw in ("公告", "披露", "财报", "季报", "年报", "业绩", "股东",
+                              "基本面", "财务", "经营", "公司概况", "资料", "详情",
+                              "announcement", "filing", "earnings", "financials")):
+        skill = "announcement-search"
+        args: dict[str, Any] = {"query": query_term, "limit": "10", "days": "30"}
+    elif any(kw in q for kw in ("研报", "深度", "解读", "券商", "研究报告", "research", "report")):
+        skill = "report-search"
+        args = {"query": query_term, "limit": "10", "days": "30"}
+    elif any(kw in q for kw in ("新闻", "资讯", "动态", "近况", "news", "latest")):
+        skill = "news-search"
+        args = {"query": query_term, "limit": "10", "days": "30"}
+    else:
+        # Fallback when the user said e.g. "看看它的最新情况" — pick
+        # announcement (broadest of the three).
+        skill = "announcement-search"
+        args = {"query": query_term, "limit": "10", "days": "30"}
+
+    # Make sure the target skill is actually registered (e.g. user
+    # disabled it in the UI) — bail if not, so the LLM gets a clean
+    # chance to handle it.
+    if not REGISTRY.get_spec(skill):
+        return (None, None, None)
+
+    return (skill, args, target_row)
