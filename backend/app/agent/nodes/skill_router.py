@@ -87,37 +87,45 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     if plan and pending_idx < len(plan):
         step = plan[pending_idx]
         skill = step.get("target_skill")
-        # A null skill means "this step is just a final answer".
+        # A null skill (whether planner fallback or explicit
+        # "summarise" step) is treated as "let the LLM router decide
+        # what to do next". We still advance the index so we don't
+        # re-encounter the same null step on the next turn. This is
+        # safer than the old behaviour of immediately emitting a
+        # final-answer placeholder, which bailed out before any skill
+        # ran.
         if skill is None:
-            return {
-                "final_answer": (
-                    f"（按计划在第 {pending_idx + 1} 步直接输出答案。）"
-                ),
-                "reflection_verdict": "sufficient",
-                "pending_step_index": pending_idx + 1,
-            }
-        if not REGISTRY.get_spec(skill) or not REGISTRY.is_enabled(skill):
-            logger.warning("router: plan step %d references invalid skill %r, skipping", pending_idx, skill)
-        else:
-            args = _substitute_placeholders(
-                step.get("args", {}),
-                previous_results,
+            logger.info(
+                "router: plan step %d has null target_skill (goal=%r); falling through to LLM path",
+                pending_idx, step.get("goal", ""),
             )
             return {
                 "pending_step_index": pending_idx + 1,
-                "tool_calls": previous_results + [
-                    {
-                        "name": skill,
-                        "args": args,
-                        "trace_id": "",
-                        "result": None,
-                        "ok": False,
-                        "duration_ms": 0,
-                        "error": None,
-                    }
-                ],
+                # Don't reset plan — other valid steps may follow.
             }
-        # Fall through to LLM path if the plan step is invalid.
+        if not REGISTRY.get_spec(skill) or not REGISTRY.is_enabled(skill):
+            logger.warning("router: plan step %d references invalid skill %r, skipping", pending_idx, skill)
+            return {
+                "pending_step_index": pending_idx + 1,
+            }
+        args = _substitute_placeholders(
+            step.get("args", {}),
+            previous_results,
+        )
+        return {
+            "pending_step_index": pending_idx + 1,
+            "tool_calls": previous_results + [
+                {
+                    "name": skill,
+                    "args": args,
+                    "trace_id": "",
+                    "result": None,
+                    "ok": False,
+                    "duration_ms": 0,
+                    "error": None,
+                }
+            ],
+        }
 
     # ---- LLM path ----
     llm = build_chat_model(settings, temperature=0.0)

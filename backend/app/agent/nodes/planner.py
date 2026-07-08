@@ -187,10 +187,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("planner LLM call failed")
-        # Fallback: a 1-step empty plan; the router's LLM path will
-        # then drive the question reactively.
+        # Fallback: empty plan → router's LLM path will drive the
+        # question reactively. Don't emit a fake 1-step plan with
+        # null skill; that short-circuits the whole run.
         return {
-            "plan": [{"goal": "fallback: router decides", "target_skill": None, "args": {}}],
+            "plan": [],
             "pending_step_index": 0,
             "error": f"planner LLM call failed: {exc}",
         }
@@ -198,9 +199,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     content = resp.content if isinstance(resp.content, str) else str(resp.content)
     parsed = _try_parse_plan(content)
     if not parsed or not parsed.get("plan"):
-        logger.warning("planner: failed to parse plan, falling back to 1-step empty plan")
+        logger.warning("planner: failed to parse plan (raw output: %r), falling back to reactive router", content[:300])
         return {
-            "plan": [{"goal": "fallback: router decides", "target_skill": None, "args": {}}],
+            "plan": [],
             "pending_step_index": 0,
         }
 
@@ -220,9 +221,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         clean_plan.append(step)
 
     # Edge case: planner gave us an empty plan after validation —
-    # fall back to letting the router LLM handle it.
+    # fall back to letting the router LLM handle it reactively.
     if not clean_plan:
-        clean_plan = [{"goal": "fallback: router decides", "target_skill": None, "args": {}}]
+        logger.warning("planner: every planned step was invalid, falling back to reactive router")
 
     logger.info(
         "planner: produced %d-step plan: %s",
