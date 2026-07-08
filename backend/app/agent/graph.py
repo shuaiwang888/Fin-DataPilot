@@ -88,6 +88,11 @@ def _build_graph() -> Any:
 
     g.add_edge("synthesizer", END)
 
+    # Default LangGraph recursion limit is 25. With the multi-step
+    # plan + re-plan flow + anysearch being a slightly slower skill,
+    # we hit it on complex questions. Pass the limit via the config
+    # dict at astream time (LangGraph 0.x's .compile() doesn't accept
+    # a recursion_limit kwarg; the config goes on astream/ainvoke).
     return g.compile()
 
 
@@ -144,7 +149,9 @@ async def run_agent_stream(
     final_state: AgentState = dict(init_state)
 
     try:
-        async for event in graph.astream(init_state):
+        # Bump LangGraph's default 25 recursion limit to 50 for
+        # multi-step plan + re-plan flows. Most queries stay <10.
+        async for event in graph.astream(init_state, config={"recursion_limit": 50}):
             # event is dict {node_name: node_output}
             for node_name, node_out in event.items():
                 if not isinstance(node_out, dict):

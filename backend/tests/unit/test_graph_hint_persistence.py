@@ -133,7 +133,7 @@ async def test_graph_propagates_reflector_hint_to_router() -> None:
             "next_args_hint": None,
         }
         final_state: dict[str, Any] = dict(init)
-        async for ev in graph.astream(init):
+        async for ev in graph.astream(init, config={"recursion_limit": 50}):
             for _, node_out in ev.items():
                 if isinstance(node_out, dict):
                     final_state.update(node_out)

@@ -54,6 +54,32 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     settings = get_settings()
     previous_results = state.get("tool_calls", [])
 
+    # ---- Loop guard: if the last 2 tool calls have IDENTICAL
+    # (name, args) the agent is stuck re-trying the same failing
+    # query (LLM keeps re-planning the same way). Bail with an
+    # honest "I don't have the right data" answer instead of
+    # burning the recursion budget.
+    if len(previous_results) >= 2:
+        last = previous_results[-1]
+        prev = previous_results[-2]
+        if (
+            last.get("name") == prev.get("name")
+            and json.dumps(last.get("args", {}), sort_keys=True, ensure_ascii=False)
+            == json.dumps(prev.get("args", {}), sort_keys=True, ensure_ascii=False)
+        ):
+            logger.warning(
+                "router: detected identical-args loop on %s; bailing",
+                last.get("name"),
+            )
+            return {
+                "final_answer": (
+                    f"已对 `{last.get('name')}` 重复调用了相同的查询，均未拿到有效数据。"
+                    "请换个问法：比如直接给出要查的股票名 / 代码，或者把条件说得更具体一些。"
+                ),
+                "reflection_verdict": "failed",
+                "error": f"identical-args loop on {last.get('name')}",
+            }
+
     # ---- Fast path #1: consume reflector's next_skill_hint ----
     hint_skill = state.get("next_skill_hint")
     hint_args = state.get("next_args_hint")
