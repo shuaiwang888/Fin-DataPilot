@@ -14,6 +14,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application code
 COPY app ./app
 
+# Bundled skills (e.g. Skills/anysearch-skill/). The deploy script
+# copies the repo's Skills/ directory into the build context root
+# alongside app/ + requirements.txt + Dockerfile. The backend's
+# `anysearch_dir` setting resolves <WORKDIR>/Skills/anysearch-skill
+# by default, which lands here.
+COPY Skills ./Skills
+
 # Data + log dirs (HF Spaces can persist /data across rebuilds)
 RUN mkdir -p /data/outputs /data/logs
 
