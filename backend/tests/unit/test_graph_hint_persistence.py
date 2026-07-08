@@ -62,8 +62,20 @@ async def test_graph_propagates_reflector_hint_to_router() -> None:
     # so the reflector LLM IS called for the post-announcement check.
     # Stub it to return sufficient so the loop terminates.
     sufficient_response = json.dumps({"verdict": "sufficient", "reason": "test terminate"})
+    # Pre-populate the plan so the planner LLM doesn't run — we want
+    # to test the rest of the graph (router/reflector/hint) with a
+    # deterministic plan in place.
+    pre_plan = [
+        {"goal": "find top stock", "target_skill": "financial-query",
+         "args": {"query": "今日A股涨停股票,按总市值降序排序", "limit": "5"}},
+        {"goal": "get announcements", "target_skill": "announcement-search",
+         "args": {"query": "<step_0_top_stock> 最近公告", "days": "30", "limit": "10"}},
+    ]
+    planner_response = json.dumps({"plan": pre_plan, "rationale": "test plan"})
+
     with patch("app.agent.nodes.skill_router.build_chat_model") as mock_router_build, \
          patch("app.agent.nodes.reflector.build_chat_model") as mock_refl_build, \
+         patch("app.agent.nodes.planner.build_chat_model") as mock_planner_build, \
          patch("app.agent.nodes.executor.REGISTRY") as mock_executor_reg:
         router_llm = AsyncMock()
         router_llm.ainvoke = AsyncMock(return_value=type(
@@ -75,6 +87,11 @@ async def test_graph_propagates_reflector_hint_to_router() -> None:
             "R", (), {"content": sufficient_response}
         )())
         mock_refl_build.return_value = refl_llm
+        planner_llm = AsyncMock()
+        planner_llm.ainvoke = AsyncMock(return_value=type(
+            "R", (), {"content": planner_response}
+        )())
+        mock_planner_build.return_value = planner_llm
 
         async def fake_dispatch(name: str, args: dict[str, Any]):
             from app.skills.base import ToolResult
@@ -126,17 +143,17 @@ async def test_graph_propagates_reflector_hint_to_router() -> None:
     names = [c.get("name") for c in calls]
     assert names[0] == "financial-query", f"step 1 wrong: {names}"
     assert names[1] == "announcement-search", (
-        f"step 2 should follow reflector's hint, got {names[1]!r}. "
-        f"This means the next_skill_hint was dropped — likely an "
-        f"undeclared AgentState field. Full calls: {calls!r}"
+        f"step 2 should follow the plan's 2nd step, got {names[1]!r}. "
+        f"Full calls: {calls!r}"
     )
-    # The hint must also be the right one for 华勤技术 (top-1 by
-    # market cap, which is 1169.57 in the stub).
+    # The plan should have substituted the <step_0_top_stock> with
+    # the top row from step 0 (华勤技术 603296.SH).
     ann_call = calls[1]
     assert "华勤技术" in ann_call["args"].get("query", "")
-    # Router LLM should have been called exactly once (initial).
-    # Step 2 should consume the hint, not call the LLM.
-    assert router_llm.ainvoke.call_count == 1, (
+    # Planner LLM was called once (initial).
+    assert planner_llm.ainvoke.call_count == 1
+    # Router LLM should not have been called (plan-driven path).
+    assert router_llm.ainvoke.call_count == 0, (
         f"router LLM called {router_llm.ainvoke.call_count} times; "
-        f"expected 1 (initial). Subsequent calls should use the hint."
+        f"expected 0. Plan-driven router should not call LLM."
     )

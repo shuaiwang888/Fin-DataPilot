@@ -41,19 +41,20 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     """Decide the next skill to call, or terminate if the answer is ready.
 
     Routing priority:
-      1. If the previous reflector step emitted `next_skill_hint` + a
-         valid `next_args_hint` AND the named skill is registered +
-         enabled, use the hint directly. This is the multi-step
-         "got a list of 56 stocks, now go get announcement for the
-         top one" loop — reflector knows the original question, we
-         trust it.
-      2. Otherwise fall back to the LLM call. The LLM sees the full
-         multi-call history and decides the next tool_call.
+      1. **Reflector's `next_skill_hint`** — if the previous reflection
+         emitted a valid hint, use it directly. Handles the
+         "I just realized I need to chain" reactive case.
+      2. **Plan-driven** — if the planner left a pending step in
+         `state.plan`, consume it. This is the "pre-decomposed
+         question" fast path that lets the router advance without
+         calling the LLM at all.
+      3. **LLM fallback** — if neither hint nor plan, ask the LLM
+         to pick the next step.
     """
     settings = get_settings()
     previous_results = state.get("tool_calls", [])
 
-    # ---- Fast path: consume reflector's next_skill_hint ----
+    # ---- Fast path #1: consume reflector's next_skill_hint ----
     hint_skill = state.get("next_skill_hint")
     hint_args = state.get("next_args_hint")
     if (
@@ -63,8 +64,6 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         and REGISTRY.is_enabled(hint_skill)
         and isinstance(hint_args, dict)
     ):
-        # The hint is only consumed ONCE — clear it so the next
-        # reflector→router cycle re-evaluates from scratch.
         return {
             "pending_step_index": state.get("pending_step_index", 0),
             "tool_calls": previous_results + [
@@ -78,11 +77,47 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
                     "error": None,
                 }
             ],
-            # Clear the consumed hint so the next reflection cycle
-            # starts fresh.
             "next_skill_hint": None,
             "next_args_hint": None,
         }
+
+    # ---- Fast path #2: consume the next plan step ----
+    plan = state.get("plan") or []
+    pending_idx = state.get("pending_step_index", 0)
+    if plan and pending_idx < len(plan):
+        step = plan[pending_idx]
+        skill = step.get("target_skill")
+        # A null skill means "this step is just a final answer".
+        if skill is None:
+            return {
+                "final_answer": (
+                    f"（按计划在第 {pending_idx + 1} 步直接输出答案。）"
+                ),
+                "reflection_verdict": "sufficient",
+                "pending_step_index": pending_idx + 1,
+            }
+        if not REGISTRY.get_spec(skill) or not REGISTRY.is_enabled(skill):
+            logger.warning("router: plan step %d references invalid skill %r, skipping", pending_idx, skill)
+        else:
+            args = _substitute_placeholders(
+                step.get("args", {}),
+                previous_results,
+            )
+            return {
+                "pending_step_index": pending_idx + 1,
+                "tool_calls": previous_results + [
+                    {
+                        "name": skill,
+                        "args": args,
+                        "trace_id": "",
+                        "result": None,
+                        "ok": False,
+                        "duration_ms": 0,
+                        "error": None,
+                    }
+                ],
+            }
+        # Fall through to LLM path if the plan step is invalid.
 
     # ---- LLM path ----
     llm = build_chat_model(settings, temperature=0.0)
@@ -118,7 +153,6 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     parsed = _try_parse_tool_call(content)
 
     if parsed is None:
-        # Treat as final answer
         return {
             "final_answer": content,
             "reflection_verdict": "sufficient",
@@ -154,3 +188,75 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
             }
         ],
     }
+
+
+# ---- Plan placeholder substitution ------------------------------------
+
+
+def _substitute_placeholders(args: dict[str, Any], prior_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Replace `<step_N_xxx>` placeholders in args with values from
+    the Nth prior call's result.
+
+    Supported placeholders:
+      <step_N_top_stock>   → "name(code)" of the top market-cap row in
+                              step N's result (or top change% for
+                              "涨停" patterns)
+      <step_N_top_name>    → just the name
+      <step_N_top_code>    → just the code
+      <step_N_first>       → the first row, JSON-serialised
+    """
+    if not prior_calls:
+        return args
+
+    pattern = re.compile(r"<step_(\d+)_(top_stock|top_name|top_code|first)>")
+
+    def lookup(step_idx: int, key: str) -> str:
+        if step_idx >= len(prior_calls):
+            return ""
+        call = prior_calls[step_idx]
+        data = (call.get("result") or {}).get("data") or {}
+        rows: list[dict[str, Any]] = []
+        if isinstance(data, dict):
+            rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
+        if not isinstance(rows, list) or not rows:
+            return ""
+        # Pick the row with the highest market cap (or first by default).
+        def _num(r: dict) -> float:
+            for k in ("总市值", "A股市值", "总市值(亿元)", "market_cap"):
+                v = r.get(k)
+                if v is None:
+                    continue
+                try:
+                    return float(str(v).replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+            return 0.0
+        rows_sorted = sorted(rows, key=_num, reverse=True)
+        top = rows_sorted[0]
+        name = top.get("股票简称") or top.get("name") or top.get("简称") or ""
+        code = top.get("股票代码") or top.get("code") or top.get("代码") or ""
+        if key == "top_stock":
+            return f"{name} {code}".strip()
+        if key == "top_name":
+            return str(name)
+        if key == "top_code":
+            return str(code)
+        if key == "first":
+            return json.dumps(top, ensure_ascii=False)
+        return ""
+
+    def replace(match: re.Match) -> str:
+        step_idx = int(match.group(1))
+        key = match.group(2)
+        return lookup(step_idx, key)
+
+    def walk(obj: Any) -> Any:
+        if isinstance(obj, str):
+            return pattern.sub(replace, obj)
+        if isinstance(obj, dict):
+            return {k: walk(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [walk(x) for x in obj]
+        return obj
+
+    return walk(args)

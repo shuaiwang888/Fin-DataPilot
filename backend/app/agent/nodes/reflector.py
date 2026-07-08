@@ -105,6 +105,7 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         return {
             "reflection_verdict": "need_more",
             "reflection": "工具返回为空数据",
+            **_maybe_clear_plan_for_replan("need_more", state),
         }
 
     # ---- Deterministic multi-step patterns ----
@@ -132,6 +133,7 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
             ),
             "next_skill_hint": pattern_a_skill,
             "next_args_hint": pattern_a_args,
+            **_maybe_clear_plan_for_replan("need_more", state),
         }
 
     # Otherwise let the LLM decide — but give it the full multi-call
@@ -169,6 +171,7 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         out: dict[str, Any] = {
             "reflection_verdict": verdict,
             "reflection": obj.get("reason", ""),
+            **_maybe_clear_plan_for_replan(verdict, state),
         }
         # Forward the hint to the router — even if the LLM wrote a bad
         # hint, the router validates + falls back to its own LLM call,
@@ -183,6 +186,33 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("reflector LLM call failed (%s) — defaulting to sufficient", exc)
         return {"reflection_verdict": "sufficient"}
+
+
+# ---- Plan exhaustion → trigger re-plan --------------------------------
+
+
+def _maybe_clear_plan_for_replan(verdict: str, state: AgentState) -> dict[str, Any]:
+    """If the verdict is need_more but the plan is exhausted, clear the
+    plan so the next router iteration re-enters via the planner
+    instead of falling through to its own LLM call.
+
+    This is how a multi-step "react to unexpected data" re-plan kicks
+    in. The planner LLM call gets the full tool history and re-emits
+    a new plan.
+    """
+    if verdict != "need_more":
+        return {}
+    plan = state.get("plan") or []
+    pending_idx = state.get("pending_step_index", 0)
+    if plan and pending_idx < len(plan):
+        # Plan still has steps → router will advance naturally. No
+        # re-plan needed.
+        return {}
+    # Plan is exhausted (or never existed). Clear it so the next
+    # planner invocation runs with the latest context.
+    if plan:
+        logger.info("reflector: plan exhausted + need_more → clearing plan for re-plan")
+    return {"plan": [], "pending_step_index": 0}
 
 
 def _truncate(result: Any, max_chars: int) -> str:

@@ -1,4 +1,23 @@
-"""LangGraph StateGraph assembly + streaming entry point."""
+"""LangGraph StateGraph assembly + streaming entry point.
+
+Pipeline:
+
+    planner → skill_router → executor → reflector ─┐
+       ↑        ↑            ↓                       │
+       │        │            └── reflects: enough?  │
+       │        │                                   │
+       │        └──── hint: skip LLM, use plan step │
+       │                                            │
+       └────────── plan exhausted + need_more ──────┘
+                            │
+                            ↓
+                       synthesizer → END
+
+The planner runs once at the start to pre-decompose the question
+into a sequence of plan steps. The skill router then walks through
+the plan without re-asking the LLM, with the reflector deciding
+when to stop or when to trigger a re-plan.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,6 +26,7 @@ from typing import Any, AsyncIterator
 from langgraph.graph import END, StateGraph
 
 from app.agent.nodes.executor import executor_node
+from app.agent.nodes.planner import planner_node
 from app.agent.nodes.reflector import reflector_node
 from app.agent.nodes.skill_router import skill_router_node
 from app.agent.nodes.synthesizer import synthesize
@@ -19,12 +39,14 @@ logger = logging.getLogger(__name__)
 
 def _build_graph() -> Any:
     g = StateGraph(AgentState)
+    g.add_node("planner", planner_node)
     g.add_node("skill_router", skill_router_node)
     g.add_node("executor", executor_node)
     g.add_node("reflector", reflector_node)
     g.add_node("synthesizer", lambda s: s)  # placeholder; streaming handled outside
 
-    g.set_entry_point("skill_router")
+    g.set_entry_point("planner")
+    g.add_edge("planner", "skill_router")  # planner always feeds into the router
 
     # After router: if final_answer was set, go to synthesizer; else go to executor
     def _after_router(state: AgentState) -> str:
@@ -42,16 +64,24 @@ def _build_graph() -> Any:
     # After executor: always go to reflector
     g.add_edge("executor", "reflector")
 
-    # After reflector: if more rounds needed AND round limit not reached, loop back to router
+    # After reflector: three paths.
+    #   need_more + plan still has steps → skill_router (advance plan)
+    #   need_more + plan exhausted (cleared by reflector) → planner (re-plan)
+    #   sufficient / failed / rounds cap hit → synthesizer
     def _after_reflector(state: AgentState) -> str:
         verdict = state.get("reflection_verdict", "sufficient")
         rounds = state.get("rounds_used", 0)
         max_rounds = get_settings().agent_max_reflect_rounds
         if verdict == "need_more" and rounds < max_rounds:
+            plan = state.get("plan") or []
+            if not plan:
+                # Plan was cleared (exhausted) → re-plan
+                return "planner"
             return "skill_router"
         return "synthesizer"
 
     g.add_conditional_edges("reflector", _after_reflector, {
+        "planner": "planner",
         "skill_router": "skill_router",
         "synthesizer": "synthesizer",
     })
@@ -103,6 +133,10 @@ async def run_agent_stream(
         "rounds_used": 0,
         "reflection_verdict": "need_more",
         "trace_id": trace_id,
+        "plan": [],
+        "pending_step_index": 0,
+        "next_skill_hint": None,
+        "next_args_hint": None,
     }
     yield {"event": EV_THINK, "data": {"step": "entry", "text": f"开始处理：{user_query}", "trace_id": trace_id}}
 
@@ -117,6 +151,22 @@ async def run_agent_stream(
                     continue
                 final_state.update(node_out)
                 # Stream per-node events
+                if node_name == "planner":
+                    plan = node_out.get("plan") or []
+                    steps = [
+                        f"{s.get('target_skill') or 'final'} ({s.get('goal', '')[:40]})"
+                        for s in plan
+                    ]
+                    rationale = node_out.get("rationale", "") or ""
+                    yield {
+                        "event": EV_THINK,
+                        "data": {
+                            "step": "plan",
+                            "text": f"已规划 {len(plan)} 步：{' → '.join(steps)}" + (
+                                f"\n理由：{rationale}" if rationale else ""
+                            ),
+                        },
+                    }
                 if node_name == "skill_router":
                     tc = (node_out.get("tool_calls") or [])
                     if tc and tc[-1].get("result") is None:
