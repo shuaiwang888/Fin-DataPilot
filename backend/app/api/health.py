@@ -100,3 +100,71 @@ def _mount_info(path: str) -> str:
 async def echo(text: str) -> dict:
     """Round-trip echo endpoint to verify CORS without invoking the LLM."""
     return {"echo": text}
+
+
+@router.get("/diag/anysearch")
+async def diag_anysearch() -> dict:
+    """Why isn't the anysearch skill showing up in /api/skills?
+
+    Walks every resolution path the config's anysearch_dir property
+    tries, plus the bundled Skills/ tree, so we can tell from one
+    request whether the problem is:
+      - Dockerfile didn't COPY Skills/ into the image
+      - bundled dir is there but missing the .py CLI
+      - API key not configured
+      - runtime.conf / CLI runtime detection failed
+    Read-only — never mutates the skill dir.
+    """
+    import os
+
+    settings = get_settings()
+    info: dict = {
+        "anysearch_api_key_configured": bool(
+            settings.anysearch_api_key
+            and settings.anysearch_api_key != "your-anysearch-key-here"
+        ),
+        "anysearch_skill_dir_env": settings.anysearch_skill_dir or None,
+        "anysearch_dir_resolved": settings.anysearch_dir or None,
+        "cwd": os.getcwd(),
+        "candidates": [],
+    }
+    # Mirror the resolution order from Settings.anysearch_dir so the
+    # user sees exactly which path was tried and why each failed.
+    parents2 = Path(__file__).resolve().parents[2] / "Skills" / "anysearch-skill"
+    candidates = [
+        ("settings.anysearch_skill_dir", settings.anysearch_skill_dir),
+        ("__file__.parents[2]/Skills/anysearch-skill", str(parents2)),
+        ("Path.cwd()/Skills/anysearch-skill", str(Path.cwd() / "Skills" / "anysearch-skill")),
+    ]
+    for label, p in candidates:
+        if not p:
+            continue
+        path = Path(p)
+        info["candidates"].append({
+            "label": label,
+            "path": p,
+            "exists": path.is_dir(),
+        })
+
+    # Probe what's actually on disk so we know whether the bundled
+    # skill is in the image at all.
+    cwd_skills = Path.cwd() / "Skills"
+    info["cwd_Skills_exists"] = cwd_skills.is_dir()
+    if cwd_skills.is_dir():
+        info["cwd_Skills_subdirs"] = sorted(
+            entry.name for entry in cwd_skills.iterdir() if entry.is_dir()
+        )
+        target = cwd_skills / "anysearch-skill"
+        if target.is_dir():
+            info["anysearch_skill_top_level"] = sorted(
+                entry.name for entry in target.iterdir()
+            )[:20]
+            cli = target / "scripts" / "anysearch_cli.py"
+            info["cli_exists"] = cli.exists()
+            if cli.exists():
+                info["cli_executable"] = os.access(cli, os.X_OK)
+            info["runtime_conf"] = (target / "runtime.conf").read_text(
+                encoding="utf-8", errors="replace"
+            ) if (target / "runtime.conf").exists() else None
+    info["anysearch_in_registry"] = REGISTRY.get_spec("anysearch") is not None
+    return info
