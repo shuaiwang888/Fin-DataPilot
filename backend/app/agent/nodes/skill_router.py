@@ -17,6 +17,45 @@ from app.skills.registry import REGISTRY
 logger = logging.getLogger(__name__)
 
 
+def _result_has_zero_rows(result: Any) -> bool:
+    """True when the tool result is OK but the data field has no rows.
+
+    Mirrors the reflector's row-counting heuristic (datas / articles /
+    announcements / reports) so the loop guard agrees with the
+    "got nothing" verdict the reflector would have emitted.
+    """
+    if not isinstance(result, dict):
+        return False
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return False
+    rows = (
+        data.get("datas")
+        or data.get("articles")
+        or data.get("announcements")
+        or data.get("reports")
+        or []
+    )
+    return isinstance(rows, list) and len(rows) == 0
+
+
+def _loop_bail(skill: str, reason_detail: str) -> dict[str, Any]:
+    """Return the standard "loop detected" final_answer payload."""
+    return {
+        "final_answer": (
+            f"已对 `{skill}` {reason_detail}，仍未拿到有效数据。"
+            "可能的原因：要查的标的名称在数据源里没有完全一致的拼写、"
+            "或者该 Skill 的数据源没有覆盖这条信息。"
+            "请试试：\n"
+            f"  - 直接给股票名 / 代码（如「贵州茅台 600519」），我会用它调 `{skill}`\n"
+            "  - 或者把条件换一种说法（去掉「近 N 天」等窗口限制）\n"
+            "  - 或者用 anysearch 联网搜这条信息"
+        ),
+        "reflection_verdict": "failed",
+        "error": f"loop on {skill}: {reason_detail}",
+    }
+
+
 def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
     """Best-effort extraction of a tool_call JSON from LLM output."""
     text = text.strip()
@@ -54,31 +93,51 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     settings = get_settings()
     previous_results = state.get("tool_calls", [])
 
-    # ---- Loop guard: if the last 2 tool calls have IDENTICAL
-    # (name, args) the agent is stuck re-trying the same failing
-    # query (LLM keeps re-planning the same way). Bail with an
-    # honest "I don't have the right data" answer instead of
-    # burning the recursion budget.
-    if len(previous_results) >= 2:
+    # ---- Loop guards. Catches three stuck-on-one-thing failure modes:
+    #
+    #   1. **Identical-args loop**: last 2 tool_calls are byte-for-byte
+    #      the same → bail immediately.
+    #   2. **Same-skill loop**: last 3 tool_calls are all the same
+    #      skill (regardless of args). Catches the "LLM keeps
+    #      re-planning the same bad query" case where each re-plan
+    #      has a slightly different args value (e.g. "admin",
+    #      "admin1", "待定").
+    #   3. **Zero-result retry**: last 3 tool_calls are the same skill
+    #      AND every one of them returned ok=True with 0 rows. We
+    #      never recover by retrying the same skill.
+    if previous_results:
         last = previous_results[-1]
-        prev = previous_results[-2]
-        if (
-            last.get("name") == prev.get("name")
-            and json.dumps(last.get("args", {}), sort_keys=True, ensure_ascii=False)
-            == json.dumps(prev.get("args", {}), sort_keys=True, ensure_ascii=False)
-        ):
-            logger.warning(
-                "router: detected identical-args loop on %s; bailing",
-                last.get("name"),
-            )
-            return {
-                "final_answer": (
-                    f"已对 `{last.get('name')}` 重复调用了相同的查询，均未拿到有效数据。"
-                    "请换个问法：比如直接给出要查的股票名 / 代码，或者把条件说得更具体一些。"
-                ),
-                "reflection_verdict": "failed",
-                "error": f"identical-args loop on {last.get('name')}",
-            }
+        last_name = last.get("name", "")
+
+        # (1) byte-identical
+        if len(previous_results) >= 2:
+            prev = previous_results[-2]
+            if (
+                last_name == prev.get("name")
+                and json.dumps(last.get("args", {}), sort_keys=True, ensure_ascii=False)
+                == json.dumps(prev.get("args", {}), sort_keys=True, ensure_ascii=False)
+            ):
+                logger.warning("router: identical-args loop on %s; bailing", last_name)
+                return _loop_bail(last_name, "args 完全相同")
+
+        # (2) + (3) same skill N times / zero result
+        if len(previous_results) >= 3:
+            tail = previous_results[-3:]
+            if all(c.get("name") == last_name for c in tail):
+                # Compute how many of the last 3 returned 0 rows.
+                zero_count = sum(
+                    1 for c in tail
+                    if _result_has_zero_rows(c.get("result"))
+                )
+                if zero_count >= 2:
+                    logger.warning(
+                        "router: same-skill(%s) loop, last 3 had %d zero-result calls; bailing",
+                        last_name, zero_count,
+                    )
+                    return _loop_bail(
+                        last_name,
+                        f"连续 3 次都对 {last_name} 调用且都拿到 0 条结果",
+                    )
 
     # ---- Fast path #1: consume reflector's next_skill_hint ----
     hint_skill = state.get("next_skill_hint")
