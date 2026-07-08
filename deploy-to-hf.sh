@@ -11,6 +11,10 @@
 #
 # The HF Space root must contain: Dockerfile, app/, requirements.txt, start.sh
 # (Skills/ is mounted at /Skills inside the container — agent reads it from there.)
+#
+# Triggered by CI on every push to main (paths: backend/**, Skills/**,
+# this file, the workflow file). Use HF_TOKEN repo secret to push via
+# HTTPS when the SSH deploy key isn't available.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
