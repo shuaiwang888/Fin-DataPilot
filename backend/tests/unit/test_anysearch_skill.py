@@ -5,6 +5,8 @@ the argv builder produces sane CLI commands and the action router
 rejects garbage. End-to-end real-API checks live in the manual
 TEST_PLAN.md inside Skills/anysearch-skill/.
 """
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.skills.anysearch import _build_argv, ACTIONS
@@ -35,6 +37,24 @@ def test_action_search_vertical() -> None:
         "--domain", "finance",
         "--sub_domain", "finance.quote",
         "--sdp", "type=stock,symbol=AAPL,cn_code=",
+    ]
+
+
+def test_action_search_ignores_blank_or_invalid_max_results() -> None:
+    assert _build_argv("search", {"query": "Momenta", "max_results": ""}) == [
+        "search", "Momenta",
+    ]
+    assert _build_argv("search", {"query": "Momenta", "max_results": "many"}) == [
+        "search", "Momenta",
+    ]
+
+
+def test_action_search_clamps_max_results() -> None:
+    assert _build_argv("search", {"query": "Momenta", "max_results": 99}) == [
+        "search", "Momenta", "--max_results", "10",
+    ]
+    assert _build_argv("search", {"query": "Momenta", "max_results": 0}) == [
+        "search", "Momenta", "--max_results", "1",
     ]
 
 
@@ -161,3 +181,55 @@ def test_anysearch_spec_description_mentions_finance() -> None:
     # for finance queries.
     assert "get_sub_domains" in spec.description
     assert "finance" in spec.description
+
+
+# --- handler-level defensive try/except --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handler_returns_failed_result_when_argv_build_raises() -> None:
+    """Regression for the HF Space crash: if _build_argv raises any
+    unexpected exception (e.g. int('') on a future LLM input), the
+    handler must catch it and return ok=False — never let the
+    exception propagate out of the handler and abort the whole
+    graph run."""
+    from app.skills.anysearch import anysearch_handler
+
+    # Force _build_argv to raise
+    with patch("app.skills.anysearch._build_argv", side_effect=ValueError("int(''): boom")):
+        result = await anysearch_handler(action="search", query="test")
+    assert result.ok is False
+    assert "argv" in result.error
+    assert "ValueError" in result.error
+    assert "int(''): boom" in result.error
+    assert result.tool == "anysearch"
+
+
+@pytest.mark.asyncio
+async def test_handler_max_results_empty_string_does_not_crash() -> None:
+    """Direct regression for the reported bug: LLM passes
+    max_results='' (empty string). The old code did int('') and
+    ValueError bubbled out of the handler, killing the whole
+    agent graph. The fixed code uses _coerce_max_results which
+    returns None for ''."""
+    from app.skills.anysearch import anysearch_handler
+
+    # Stub the subprocess to avoid actually running the CLI.
+    with patch("app.skills.anysearch.asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"some output\n", b""))
+        proc.returncode = 0
+        mock_exec.return_value = proc
+
+        # action=search + query present + max_results='' — used to crash
+        result = await anysearch_handler(
+            action="search", query="test", max_results="",
+        )
+    # We expect the call to succeed (or fail gracefully), NOT raise.
+    assert isinstance(result.ok, bool)
+    # The CLI was invoked with argv that omits --max_results (since
+    # coerce returned None for '').
+    called_argv = mock_exec.call_args.args
+    assert "--max_results" not in called_argv, (
+        f"empty max_results should omit --max_results, got argv: {called_argv}"
+    )

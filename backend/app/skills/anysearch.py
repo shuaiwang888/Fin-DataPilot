@@ -206,6 +206,16 @@ def _coerce_str(value: Any) -> str:
     return str(value).strip()
 
 
+def _coerce_max_results(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(n, 10))
+
+
 def _normalise_domain_args(args: dict[str, Any]) -> tuple[str, str, str]:
     """Return cleaned (domain, sub_domain, sdp).
 
@@ -279,10 +289,9 @@ def _normalise_batch_queries_json(args: dict[str, Any]) -> str | None:
             obj.pop("sub_domain", None)
 
         if max_results not in (None, "") and not obj.get("max_results"):
-            try:
-                obj["max_results"] = int(max_results)
-            except (TypeError, ValueError):
-                pass
+            coerced_max = _coerce_max_results(max_results)
+            if coerced_max is not None:
+                obj["max_results"] = coerced_max
         normalised.append(obj)
 
     if not normalised:
@@ -302,9 +311,9 @@ def _build_argv(action: str, args: dict[str, Any]) -> list[str] | None:
         if not query:
             return None
         argv: list[str] = ["search", query]
-        max_results = args.get("max_results")
+        max_results = _coerce_max_results(args.get("max_results"))
         if max_results is not None:
-            argv += ["--max_results", str(int(max_results))]
+            argv += ["--max_results", str(max_results)]
         domain, sub_domain, sdp = _normalise_domain_args(args)
         if domain:
             argv += ["--domain", domain]
@@ -415,7 +424,21 @@ async def anysearch_handler(
         "queries_json": queries_json,
         "domains": domains,
     }
-    sub_argv = _build_argv(action, args_dict)
+    try:
+        sub_argv = _build_argv(action, args_dict)
+    except Exception as exc:  # noqa: BLE001
+        # Argv construction can raise on unexpected LLM-side input
+        # (e.g. int("") before coerce, malformed dict, etc.). Don't
+        # let that propagate out — a failed ToolResult lets the
+        # reflector / loop guard decide the next step instead of
+        # blowing up the whole agent graph.
+        logger.exception("anysearch: argv build failed for action=%r", action)
+        return ToolResult(
+            tool=SKILL_LOCAL_NAME,
+            ok=False,
+            error=f"failed to build CLI argv for action={action!r}: {type(exc).__name__}: {exc}",
+            trace_id=trace_id,
+        )
     if sub_argv is None:
         return ToolResult(
             tool=SKILL_LOCAL_NAME,
