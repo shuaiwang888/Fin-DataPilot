@@ -266,3 +266,45 @@ def test_no_specific_terms_in_query_skips_low_quality_check() -> None:
     # The function might return the anysearch fallback for the
     # non-matched case, but the key check is: no crash.
     assert reason is None or isinstance(reason, str)
+
+
+@pytest.mark.asyncio
+async def test_reflector_empty_result_with_plan_remaining_does_not_emit_hint() -> None:
+    """Regression: when a step in a multi-step plan returns empty,
+    the reflector must NOT short-circuit to anysearch — it should
+    let the plan continue to the next step."""
+    from app.agent.nodes.reflector import reflector_node
+    state = {
+        "user_query": "Momenta 与纵目科技做对标",
+        "tool_calls": [
+            {
+                "name": "news-search",
+                "args": {"query": "Momenta 公司 业务 融资 估值 客户 自动驾驶", "days": "365", "limit": "15"},
+                "ok": True,
+                "result": {
+                    "data": {"articles": [], "count": 0},
+                    "ok": True,
+                },
+                "error": None,
+                "trace_id": "x",
+            }
+        ],
+        "rounds_used": 0,
+        "plan": [
+            {"goal": "step 1", "target_skill": "news-search", "args": {"query": "Momenta"}},
+            {"goal": "step 2", "target_skill": "news-search", "args": {"query": "纵目科技"}},
+            {"goal": "step 3", "target_skill": "anysearch", "args": {"query": "Momenta vs 纵目"}},
+        ],
+        "pending_step_index": 1,  # step 1 just executed; 2 steps remain
+        "history": [],
+    }
+    out = await reflector_node(state)  # type: ignore[arg-type]
+    assert out["reflection_verdict"] == "need_more"
+    # The key assertion: NO recovery hint. The router should fall
+    # through to the plan and consume step 2 (news-search 纵目).
+    assert "next_skill_hint" not in out, (
+        f"plan still has 2 steps; reflector should NOT emit anysearch "
+        f"hint, but got: {out!r}"
+    )
+    # Plan is preserved (not cleared → re-plan).
+    assert out.get("plan") != [], "plan should be preserved, not cleared for re-plan"

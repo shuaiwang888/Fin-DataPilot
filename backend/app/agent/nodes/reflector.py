@@ -103,9 +103,28 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     # Heuristic: zero results → need_more (LLM may rewrite the query).
     # If the skill returned free-form text (e.g. anysearch Markdown),
     # any non-empty text counts as "has data" — we don't try to count
-    # rows we don't know about.
+    # rows we don't know about. But the "data" check is a guard for
+    # the case where the data field is itself a string (anysearch
+    # Markdown). When data is a dict with empty row arrays ({"articles":
+    # [], "count": 0}), `not data` is False but rows IS empty — and
+    # that's the case we need to handle too.
     rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
-    if not rows and not data:
+    if not rows:
+        # When the plan still has more steps, do NOT emit a recovery
+        # hint. The router should advance to the next plan step
+        # (which may be the same skill with a different query, or a
+        # different skill that doesn't depend on this result). Only
+        # when the plan is exhausted do we apply the recovery (anysearch
+        # fallback / retry with original query).
+        plan = state.get("plan") or []
+        pending_idx = state.get("pending_step_index", 0)
+        plan_has_more = bool(plan) and pending_idx < len(plan)
+        if plan_has_more:
+            return {
+                "reflection_verdict": "need_more",
+                "reflection": "本步返回为空，但 plan 还有后续步骤，继续推进",
+                **_maybe_clear_plan_for_replan("need_more", state),
+            }
         recovery_skill, recovery_args, recovery_reason = _infer_empty_result_recovery(
             calls=calls,
             user_query=user_query,
