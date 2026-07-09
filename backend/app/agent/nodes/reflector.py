@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -408,6 +409,73 @@ def _skill_available(name: str) -> bool:
     return bool(REGISTRY.get_spec(name) and REGISTRY.is_enabled(name))
 
 
+# A specific entity term is a 3+ character Chinese phrase, a 3+ character
+# capitalised Latin word, or anything in quotes. These are the things
+# that look like company / product / person names and should appear in
+# the result rows for the result to be considered "matched" the query.
+_ENTITY_TERM_RE = re.compile(
+    r"""
+    (?P<quoted>      ["'“”](?P<q>[^"'“”]{2,})["'“”])       # "Momenta" / "纵目科技"
+    |
+    (?P<latin>       \b[A-Z][a-zA-Z]{2,}\b)                # Momenta, AAPL, Tesla
+    |
+    (?P<cjk>         [一-龥]{3,})                            # 纵目科技, 阿里巴巴
+    """,
+    re.VERBOSE,
+)
+
+
+def _extract_specific_entity_terms(user_query: str) -> list[str]:
+    """Return the specific entity-looking terms in the user query.
+
+    These are the strings that the result rows should mention by name
+    for the result to be considered "matched" the query. If the user
+    asked about "Momenta 和 纵目科技" and the rows only contain
+    "卓目科技" and "纵横科技", the specific terms won't match and
+    we can flag the result as low-quality (wrong entity).
+    """
+    terms: list[str] = []
+    for m in _ENTITY_TERM_RE.finditer(user_query or ""):
+        if m.group("quoted") is not None:
+            terms.append(m.group("q"))
+        elif m.group("latin") is not None:
+            terms.append(m.group("latin"))
+        elif m.group("cjk") is not None:
+            terms.append(m.group("cjk"))
+    # Dedupe while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in terms:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _row_mentions_any_term(row: dict[str, Any], terms: list[str]) -> bool:
+    """True when a row's name/code field contains ANY of the terms.
+
+    Used to detect "the data didn't actually match the user's
+    entities" — e.g. user asked for 纵目科技 but rows are 卓目科技
+    and 纵横科技.
+    """
+    if not terms:
+        return True  # No specific terms to check → assume match
+    fields = (
+        row.get("股票简称") or row.get("name") or row.get("简称")
+        or row.get("股票代码") or row.get("code") or row.get("代码")
+        or row.get("title") or row.get("标题") or ""
+    )
+    if not fields:
+        return False
+    if not isinstance(fields, str):
+        fields = str(fields)
+    for term in terms:
+        if term and term in fields:
+            return True
+    return False
+
+
 def _anysearch_args(user_query: str) -> dict[str, Any]:
     return {
         "action": "search",
@@ -438,6 +506,34 @@ def _infer_empty_result_recovery(
         return (None, None, "anysearch 返回为空，无法继续自动补查")
 
     if last_name in _FINANCIAL_SKILLS and _skill_available(last_name):
+        # ---- Low-quality rows: results returned but no row matches
+        # any specific entity in the user's question. This is the
+        # "Momenta vs 卓目科技 / 纵横科技" failure mode — the data
+        # is non-empty but the entities are wrong. CHECK THIS FIRST
+        # because retrying with the original query will just hit the
+        # same fuzzy-match failure; the right move is to skip to
+        # anysearch (web search typically has the right disambiguation).
+        terms = _extract_specific_entity_terms(user_query)
+        rows = _rows_from_call(last)
+        if terms and rows and not any(
+            _row_mentions_any_term(r, terms) for r in rows
+        ):
+            anysearch_called = any(c.get("name") == "anysearch" for c in calls)
+            if not anysearch_called and _skill_available("anysearch"):
+                sample_names = ", ".join(
+                    str(r.get("股票简称") or r.get("name") or r.get("title") or "?")
+                    for r in rows[:3]
+                )
+                return (
+                    "anysearch",
+                    _anysearch_args(user_query),
+                    (
+                        f"{last_name} 返了 {len(rows)} 条但都不含用户问的关键实体"
+                        f"（{','.join(terms[:3])}），返回的样例是「{sample_names}」。"
+                        "改用 anysearch 联网兜底以正确识别实体"
+                    ),
+                )
+
         last_query = str((last.get("args") or {}).get("query") or "").strip()
         original_query = (user_query or "").strip()
         retried_original = any(
