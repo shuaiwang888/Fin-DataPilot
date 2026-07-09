@@ -50,9 +50,15 @@ ACTIONS = ("search", "extract", "batch_search", "get_sub_domains")
 ACTION_HINTS = (
     "- action='search' 通用/垂直搜索。query 必填；可用 domain+sub_domain+sub_domain_params 走垂直。\n"
     "- action='extract' URL 正文提取（已转 Markdown）。url 必填。\n"
-    "- action='batch_search' 并行批量。queries_json 必填（JSON 数组字符串，每项含 query，可选带 domain/sub_domain/sub_domain_params）。\n"
+    "- action='batch_search' 并行批量。queries_json 必填（JSON 数组字符串，每项必须是 {query: ...} 对象；不要传字符串数组）。\n"
     "- action='get_sub_domains' 查某个 domain 的垂直子域能力。domain 必填。"
 )
+
+KNOWN_DOMAINS = {
+    "general", "finance", "academic", "health", "legal", "ip", "code",
+    "social_media", "travel", "film", "gaming", "business", "security",
+    "energy", "environment", "agriculture", "resource",
+}
 
 # -- runtime detection / runtime.conf ---------------------------------
 
@@ -192,6 +198,98 @@ def _try_parse_json(s: str) -> Any:
         return s
 
 
+def _coerce_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _normalise_domain_args(args: dict[str, Any]) -> tuple[str, str, str]:
+    """Return cleaned (domain, sub_domain, sdp).
+
+    LLMs occasionally put `finance` / `#finance` into sub_domain. That
+    is a domain, not a sub_domain such as `finance.quote`; passing it
+    as shared sub_domain can break or degrade the CLI call.
+    """
+    domain = _coerce_str(args.get("domain"))
+    sub_domain = _coerce_str(args.get("sub_domain"))
+    sdp = _coerce_str(args.get("sub_domain_params"))
+
+    clean_sub = sub_domain.lstrip("#").strip()
+    if clean_sub in KNOWN_DOMAINS and "." not in clean_sub:
+        if not domain:
+            domain = clean_sub
+        sub_domain = ""
+
+    return domain, sub_domain, sdp
+
+
+def _normalise_batch_queries_json(args: dict[str, Any]) -> str | None:
+    """Coerce batch_search queries into the CLI's object-array shape.
+
+    Accepts:
+      - JSON string: [{"query":"a"}]
+      - JSON string accidentally produced by LLM: ["a", "b"]
+      - Python list with either strings or objects
+    """
+    raw = args.get("queries_json")
+    if raw in (None, ""):
+        return None
+
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    else:
+        parsed = raw
+
+    if not isinstance(parsed, list) or not parsed:
+        return None
+
+    max_results = args.get("max_results")
+    normalised: list[dict[str, Any]] = []
+    for item in parsed[:5]:
+        if isinstance(item, str):
+            query = item.strip()
+            if not query:
+                continue
+            obj: dict[str, Any] = {"query": query}
+        elif isinstance(item, dict):
+            query = _coerce_str(item.get("query"))
+            if not query:
+                continue
+            obj = dict(item)
+            obj["query"] = query
+        else:
+            continue
+
+        obj_domain = _coerce_str(obj.get("domain"))
+        obj_sub_domain = _coerce_str(obj.get("sub_domain"))
+        obj_sdp = obj.get("sub_domain_params")
+        clean_obj_sub = obj_sub_domain.lstrip("#").strip()
+        if clean_obj_sub in KNOWN_DOMAINS and "." not in clean_obj_sub:
+            if not obj_domain:
+                obj["domain"] = clean_obj_sub
+            obj.pop("sub_domain", None)
+
+        if max_results not in (None, "") and not obj.get("max_results"):
+            try:
+                obj["max_results"] = int(max_results)
+            except (TypeError, ValueError):
+                pass
+        normalised.append(obj)
+
+    if not normalised:
+        return None
+    return json.dumps(normalised, ensure_ascii=False, separators=(",", ":"))
+
+
 # -- action → argv builder -------------------------------------------
 
 
@@ -200,16 +298,14 @@ def _build_argv(action: str, args: dict[str, Any]) -> list[str] | None:
     the LLM failed to provide a required parameter (caller should turn
     that into a clear error)."""
     if action == "search":
-        query = (args.get("query") or "").strip()
+        query = _coerce_str(args.get("query"))
         if not query:
             return None
         argv: list[str] = ["search", query]
         max_results = args.get("max_results")
         if max_results is not None:
             argv += ["--max_results", str(int(max_results))]
-        domain = (args.get("domain") or "").strip()
-        sub_domain = (args.get("sub_domain") or "").strip()
-        sdp = (args.get("sub_domain_params") or "").strip()
+        domain, sub_domain, sdp = _normalise_domain_args(args)
         if domain:
             argv += ["--domain", domain]
         if sub_domain:
@@ -219,7 +315,7 @@ def _build_argv(action: str, args: dict[str, Any]) -> list[str] | None:
         return argv
 
     if action == "extract":
-        url = (args.get("url") or "").strip()
+        url = _coerce_str(args.get("url"))
         if not url:
             return None
         return ["extract", url]
@@ -230,21 +326,13 @@ def _build_argv(action: str, args: dict[str, Any]) -> list[str] | None:
         #      the query N times if max_queries is given, else the LLM
         #      must supply queries_json
         #   2. queries_json (a JSON array of {query, [domain, ...]})
-        queries_json = (args.get("queries_json") or "").strip()
+        queries_json = _normalise_batch_queries_json(args)
         if queries_json:
-            try:
-                parsed = json.loads(queries_json)
-                if not isinstance(parsed, list) or not parsed:
-                    return None
-            except json.JSONDecodeError:
-                return None
             argv = ["batch_search", "--queries", queries_json]
         else:
             return None
         # Optional shared domain/sub_domain/sdp on top of per-item params.
-        domain = (args.get("domain") or "").strip()
-        sub_domain = (args.get("sub_domain") or "").strip()
-        sdp = (args.get("sub_domain_params") or "").strip()
+        domain, sub_domain, sdp = _normalise_domain_args(args)
         if domain:
             argv += ["--domain", domain]
         if sub_domain:
@@ -254,8 +342,8 @@ def _build_argv(action: str, args: dict[str, Any]) -> list[str] | None:
         return argv
 
     if action == "get_sub_domains":
-        domain = (args.get("domain") or "").strip()
-        domains = (args.get("domains") or "").strip()
+        domain = _coerce_str(args.get("domain"))
+        domains = _coerce_str(args.get("domains"))
         if domain:
             return ["get_sub_domains", "--domain", domain]
         if domains:

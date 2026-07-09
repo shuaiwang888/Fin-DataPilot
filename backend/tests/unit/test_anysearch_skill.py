@@ -69,6 +69,42 @@ def test_action_batch_search_with_queries_json() -> None:
     ]
 
 
+def test_action_batch_search_normalises_string_array_queries() -> None:
+    argv = _build_argv(
+        "batch_search",
+        {
+            "queries_json": '["昨天 A股 V字走势 原因","昨天 A股 午后拉升 领涨板块"]',
+            "max_results": "5",
+            "sub_domain": "#finance",
+        },
+    )
+
+    assert argv == [
+        "batch_search",
+        "--queries",
+        '[{"query":"昨天 A股 V字走势 原因","max_results":5},'
+        '{"query":"昨天 A股 午后拉升 领涨板块","max_results":5}]',
+        "--domain", "finance",
+    ]
+
+
+def test_action_batch_search_accepts_python_list() -> None:
+    argv = _build_argv(
+        "batch_search",
+        {
+            "queries_json": ["AAPL news", {"query": "MSFT earnings", "domain": "finance"}],
+            "max_results": 3,
+        },
+    )
+
+    assert argv == [
+        "batch_search",
+        "--queries",
+        '[{"query":"AAPL news","max_results":3},'
+        '{"query":"MSFT earnings","domain":"finance","max_results":3}]',
+    ]
+
+
 def test_action_batch_search_rejects_invalid_json() -> None:
     assert _build_argv("batch_search", {"queries_json": "not-json"}) is None
     assert _build_argv("batch_search", {"queries_json": "{}"}) is None  # not a list
