@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.nodes.reflector import reflector_node
+from app.agent.nodes.reflector import _infer_empty_result_recovery, reflector_node
 
 
 def _state_with_tool_call(name: str, *, data, ok: bool = True, error: str | None = None) -> dict:
@@ -89,3 +89,76 @@ async def test_reflector_failed_tool_call_is_failed() -> None:
     out = await reflector_node(state)  # type: ignore[arg-type]
     assert out["reflection_verdict"] == "failed"
     assert "network error" in out["reflection"]
+
+
+def test_empty_financial_result_retries_with_original_query() -> None:
+    calls = [{
+        "name": "financial-query",
+        "args": {"query": "宁德时代近期行情"},
+        "ok": True,
+        "result": {"data": {}, "ok": True},
+    }]
+
+    skill, args, reason = _infer_empty_result_recovery(
+        calls=calls,
+        user_query="宁德时代为什么跌",
+    )
+
+    assert skill == "financial-query"
+    assert args == {"query": "宁德时代为什么跌"}
+    assert "原始问句" in reason
+
+
+def test_empty_financial_result_falls_back_to_anysearch_after_retry() -> None:
+    calls = [
+        {
+            "name": "financial-query",
+            "args": {"query": "宁德时代近期行情"},
+            "ok": True,
+            "result": {"data": {}, "ok": True},
+        },
+        {
+            "name": "financial-query",
+            "args": {"query": "宁德时代为什么跌"},
+            "ok": True,
+            "result": {"data": {}, "ok": True},
+        },
+    ]
+
+    skill, args, reason = _infer_empty_result_recovery(
+        calls=calls,
+        user_query="宁德时代为什么跌",
+    )
+
+    assert skill == "anysearch"
+    assert args == {
+        "action": "search",
+        "query": "宁德时代为什么跌",
+        "domain": "finance",
+        "max_results": 5,
+    }
+    assert "anysearch" in reason
+
+
+@pytest.mark.asyncio
+async def test_reflector_empty_result_emits_recovery_hint() -> None:
+    state = {
+        "user_query": "宁德时代为什么跌",
+        "tool_calls": [
+            {
+                "name": "financial-query",
+                "args": {"query": "宁德时代近期行情"},
+                "ok": True,
+                "result": {"data": {}, "ok": True},
+                "error": None,
+                "trace_id": "x",
+            }
+        ],
+        "rounds_used": 0,
+    }
+
+    out = await reflector_node(state)  # type: ignore[arg-type]
+
+    assert out["reflection_verdict"] == "need_more"
+    assert out["next_skill_hint"] == "financial-query"
+    assert out["next_args_hint"] == {"query": "宁德时代为什么跌"}

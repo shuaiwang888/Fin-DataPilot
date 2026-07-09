@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
+
+import pytest
 
 from app.agent.nodes.synthesizer import (
+    _strip_think_artifacts,
     _truncate_long_text_fields,
     _truncate_result_for_prompt,
+    synthesize,
 )
 
 
@@ -128,3 +133,58 @@ def test_truncate_long_text_fields_recursive():
     # Titles preserved
     assert truncated["data"][0]["title"] == "t1"
     assert truncated["data"][1]["nested"]["title"] == "t2"
+
+
+def test_strip_orphan_closing_think_keeps_answer_only():
+    text = (
+        "toNavi): The evidence doesn't contain information about 高德地图.\n\n"
+        "Let me format the response. </think>\n\n"
+        "## 高德红外（002414.SZ）公司简介\n\n正文"
+    )
+
+    cleaned, extracted = _strip_think_artifacts(text)
+
+    assert cleaned == "## 高德红外（002414.SZ）公司简介\n\n正文"
+    assert len(extracted) == 1
+    assert "toNavi" in extracted[0]
+    assert "</think>" not in cleaned
+
+
+def test_strip_well_formed_think_block():
+    cleaned, extracted = _strip_think_artifacts(
+        "<think>组织成表格。</think>正式答案"
+    )
+
+    assert cleaned == "正式答案"
+    assert extracted == ["组织成表格。"]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_does_not_stream_orphan_think_into_final_answer():
+    class Chunk:
+        def __init__(self, content: str):
+            self.content = content
+
+    class FakeLLM:
+        async def astream(self, _messages):
+            yield Chunk("toNavi): The evidence doesn't contain information.\n\n")
+            yield Chunk("Let me format the response. </think>\n\n")
+            yield Chunk("## 高德红外（002414.SZ）公司简介\n\n正文")
+
+    state = {
+        "user_query": "高德红外主营业务 公司介绍",
+        "tool_calls": [],
+    }
+
+    with patch("app.agent.nodes.synthesizer.build_chat_model", return_value=FakeLLM()):
+        events = [ev async for ev in synthesize(state)]  # type: ignore[arg-type]
+
+    final = [ev for ev in events if ev["event"] == "message_final"][-1]
+    assert final["data"]["content"] == "## 高德红外（002414.SZ）公司简介\n\n正文"
+    assert "toNavi" not in final["data"]["content"]
+    assert "</think>" not in final["data"]["content"]
+
+    token_text = "".join(
+        ev["data"]["text"] for ev in events if ev["event"] == "token_delta"
+    )
+    assert "toNavi" not in token_text

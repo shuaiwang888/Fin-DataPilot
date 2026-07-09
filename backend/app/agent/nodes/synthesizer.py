@@ -133,6 +133,18 @@ MAX_THINK_BLOCK_CHARS = 200
 MAX_RESULT_CHARS = 30_000
 MAX_ITEM_TEXT_CHARS = 600
 
+_OPEN_THINK_RE = re.compile(r"<(?:think|memthink|mm:think|mn-think)\s*>", re.IGNORECASE)
+_CLOSE_THINK_RE = re.compile(r"</(?:think|memthink|mm:think|mn-think)\s*>", re.IGNORECASE)
+_THINK_BLOCK_RE = re.compile(
+    r"<(?:think|memthink|mm:think|mn-think)\s*>([\s\S]*?)"
+    r"</(?:think|memthink|mm:think|mn-think)\s*>",
+    re.IGNORECASE,
+)
+_UNCLOSED_THINK_RE = re.compile(
+    r"<(?:think|memthink|mm:think|mn-think)\s*>([\s\S]*)",
+    re.IGNORECASE,
+)
+
 # Heuristic: field names whose values are likely long free text and
 # should be eligible for per-item truncation. Match is case-insensitive
 # substring on the key.
@@ -232,6 +244,53 @@ def _truncate_result_for_prompt(result: Any, max_chars: int, max_item_text_chars
     if items:
         serialized += f"\n…(还有 {len(items)} 条因字数预算被省略)"
     return serialized
+
+
+def _strip_think_artifacts(text: str) -> tuple[str, list[str]]:
+    """Remove leaked think markup/content from a user-facing answer.
+
+    Handles both well-formed `<think>...</think>` and the common broken
+    case where the model emits only a closing tag: `reasoning...</think>answer`.
+    """
+    if not text:
+        return "", []
+
+    extracted: list[str] = []
+
+    def remember(match: re.Match[str]) -> str:
+        content = match.group(1).strip()
+        if content:
+            extracted.append(content)
+        return ""
+
+    cleaned = _THINK_BLOCK_RE.sub(remember, text)
+
+    # Broken case from some streaming models: they omit the opening tag
+    # but still close with </think>. Treat everything before the last
+    # orphan close marker as thinking, and keep only the answer after it.
+    last_close: re.Match[str] | None = None
+    for m in _CLOSE_THINK_RE.finditer(cleaned):
+        last_close = m
+    first_open = _OPEN_THINK_RE.search(cleaned)
+    if last_close and (not first_open or last_close.start() < first_open.start()):
+        leaked = cleaned[: last_close.start()].strip()
+        if leaked:
+            extracted.append(leaked)
+        cleaned = cleaned[last_close.end():]
+
+    # If a leading opening tag remains unclosed, drop that think fragment.
+    m = _UNCLOSED_THINK_RE.search(cleaned)
+    if m and cleaned.lstrip().lower().startswith(("<think", "<?think", "<memthink", "<mm:think", "<mn-think")):
+        leaked = m.group(1).strip()
+        if leaked:
+            extracted.append(leaked)
+        cleaned = cleaned[: m.start()].rstrip() + (
+            "\n\n" + cleaned[m.end():].lstrip() if m.end() < len(cleaned) else ""
+        )
+
+    cleaned = _OPEN_THINK_RE.sub("", cleaned)
+    cleaned = _CLOSE_THINK_RE.sub("", cleaned)
+    return cleaned.strip(), extracted
 
 
 async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
@@ -343,14 +402,33 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
                             pending = pending[-MAX_PENDING_TAIL:]
                             last_emit_ts = time.monotonic()
                 else:
-                    start_idx = pending.find("<think>")
-                    if start_idx >= 0:
+                    close_match = _CLOSE_THINK_RE.search(pending)
+                    open_match = _OPEN_THINK_RE.search(pending)
+                    if close_match and (
+                        open_match is None or close_match.start() < open_match.start()
+                    ):
+                        leaked = pending[: close_match.start()]
+                        if leaked.strip():
+                            think_text += leaked
+                            yield {"event": "think_chunk", "data": {"text": leaked}}
+                            yield {
+                                "event": "think_done",
+                                "data": {"text": think_text.strip()},
+                            }
+                            think_text = ""
+                        pending = pending[close_match.end():]
+                        changed = True
+                        last_emit_ts = time.monotonic()
+                        continue
+                    open_match = _OPEN_THINK_RE.search(pending)
+                    if open_match:
+                        start_idx = open_match.start()
                         if start_idx > 0:
                             emit = pending[:start_idx]
                             final_text += emit
                             yield {"event": "token_delta", "data": {"text": emit}}
                             last_emit_ts = time.monotonic()
-                        pending = pending[start_idx + len("<think>"):]
+                        pending = pending[open_match.end():]
                         in_think = True
                         think_text = ""
                         changed = True
@@ -436,43 +514,8 @@ async def synthesize(state: AgentState) -> AsyncIterator[dict[str, Any]]:
     # polluted with reasoning.
     extracted_thinks: list[str] = []
     if final_text:
-        # Accept several malformed tag variants: <think>, <mm:think>, <think>
-        think_re = re.compile(
-            r"<(?:think|memthink|think)\s*>([\s\S]*?)<(?:/think|/memthink|/think)\s*>",
-            re.IGNORECASE,
-        )
-        # Also handle unclosed think blocks (LLM forgot to close) by
-        # taking everything from <think> to the next blank line + header,
-        # OR just stripping any leading <think> to the end of the block.
-        unclosed_re = re.compile(
-            r"<(?:think|memthink|think)\s*>([\s\S]*)",
-            re.IGNORECASE,
-        )
-        for m in think_re.finditer(final_text):
-            content = m.group(1).strip()
-            if content:
-                extracted_thinks.append(content)
-        cleaned = think_re.sub("", final_text)
-        # If still starts with <think>, treat the rest as leaked thinking
-        m = unclosed_re.search(cleaned)
-        if m and cleaned.lstrip().lower().startswith(("<think", "<?think", "<memthink")):
-            leaked = m.group(1).strip()
-            if leaked:
-                extracted_thinks.append(leaked)
-            # Drop everything from the <think> tag onward (it's all thinking)
-            cleaned = cleaned[: m.start()].rstrip() + "\n\n" + cleaned[m.end() :].lstrip() if m.end() < len(cleaned) else cleaned[: m.start()].rstrip()
-        # Strip any leftover standalone <think> / </think> / </mm:think> markers
-        cleaned = re.sub(
-            r"</?(?:think|memthink|think|/think|/memthink|/think|/mn-think|/?think)\s*>",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        # Also strip Qwen-style </mm:think> markers (sometimes appears in newer models)
-        cleaned = re.sub(r"<\/?mn-think\s*>", "", cleaned, flags=re.IGNORECASE)
-        cleaned = cleaned.strip()
-        if cleaned != final_text.strip() or extracted_thinks:
-            final_text = cleaned
+        cleaned, extracted_thinks = _strip_think_artifacts(final_text)
+        final_text = cleaned
 
     # Emit each extracted think as a think_chunk + think_done so the
     # frontend renders them in the ThinkingPanel.

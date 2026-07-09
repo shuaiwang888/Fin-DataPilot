@@ -211,6 +211,38 @@ def test_missing_followup_does_not_treat_admin_as_stock() -> None:
     assert args["query"] == "华勤技术的研报"
 
 
+def test_analysis_query_after_financial_result_requests_more_financial_evidence() -> None:
+    calls = [{
+        "name": "financial-query",
+        "args": {"query": "宁德时代近期涨跌幅和资金"},
+        "ok": True,
+        "result": {"data": {"datas": [_row("300750.SZ", "宁德时代", 9000.0, -4.2)]}},
+    }]
+
+    skill, args, row = _infer_missing_requested_followup(
+        calls=calls,
+        user_query="宁德时代为什么跌",
+    )
+
+    assert skill == "announcement-search"
+    assert args == {"query": "宁德时代的公告", "limit": "10", "days": "30"}
+    assert row["股票简称"] == "宁德时代"
+
+    calls.append({
+        "name": "announcement-search",
+        "args": {"query": "宁德时代的公告"},
+        "ok": True,
+        "result": {"data": {"announcements": [{"title": "公告A"}]}},
+    })
+    skill, args, _ = _infer_missing_requested_followup(
+        calls=calls,
+        user_query="宁德时代为什么跌",
+    )
+
+    assert skill == "news-search"
+    assert args == {"query": "宁德时代的新闻", "limit": "10", "days": "30"}
+
+
 # --- end-to-end via reflector_node ----------------------------------
 
 

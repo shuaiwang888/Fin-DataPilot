@@ -31,6 +31,8 @@ REFLECTOR_PROMPT = """你是 Fin-DataPilot 的反思器（Reflector）。判断*
 - 任意一个子目标没有覆盖 → 判 `need_more`。
 - "数据非空" 不等于 "够用" — 一份 50 只股票的列表本身**没有**回答"那只最大的"是谁的公告；必须**显式追问**。
 - "数据足够" 不等于 "已精确" — 如果用户问的是单只股票的资料、单个具体数字、单一URL，不允许用列表敷衍。
+- 四个金融 Skill 可以互补：行情/财务用 `financial-query`，新闻用 `news-search`，公告用 `announcement-search`，研报用 `report-search`。原因分析、风险判断、事件影响、近况解读通常不能只靠一个 Skill。
+- `anysearch` 允许用于金融问句的兜底：优先级低于四个金融 Skill；当金融 Skill 返回为空、字段不全、没有回答用户问句，或需要公开网页/实时事实核查时，再推荐 `anysearch`。
 
 # 输出严格 JSON（不带 markdown 代码块）
 {{
@@ -47,6 +49,7 @@ REFLECTOR_PROMPT = """你是 Fin-DataPilot 的反思器（Reflector）。判断*
 # 提示
 - `next_skill_hint` 必须是**当前已注册且启用**的 skill（`financial-query` / `news-search` / `announcement-search` / `report-search` / `anysearch`）
 - `next_args_hint` 应包含"用前一步结果中的哪个具体标的 / 关键词 / 时间窗口"——例如 `{"query": "<前一步 top-1 的股票名 + 公告>", "days": "30"}`
+- 若某个金融 Skill 返回 0 条：优先换一种自然问法重试一次；再不行才用 `anysearch`（`{"action":"search","query":"...", "domain":"finance"}`）兜底。
 - 不强求 hint 完美，Router 会基于它再调一次 LLM
 """
 
@@ -102,11 +105,19 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     # rows we don't know about.
     rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
     if not rows and not data:
-        return {
+        recovery_skill, recovery_args, recovery_reason = _infer_empty_result_recovery(
+            calls=calls,
+            user_query=user_query,
+        )
+        out = {
             "reflection_verdict": "need_more",
-            "reflection": "工具返回为空数据",
+            "reflection": recovery_reason or "工具返回为空数据",
             **_maybe_clear_plan_for_replan("need_more", state),
         }
+        if recovery_skill and recovery_args:
+            out["next_skill_hint"] = recovery_skill
+            out["next_args_hint"] = recovery_args
+        return out
 
     # ---- Deterministic multi-step patterns ----
     # These are common "list-of-N + ask-about-one-of-them" questions
@@ -266,6 +277,19 @@ _FOLLOWUP_KEYWORDS = (
     "latest", "recent", "details", "filings",
 )
 
+_ANALYSIS_FOLLOWUP_KEYWORDS = (
+    "为什么", "原因", "怎么回事", "影响", "利好", "利空", "风险",
+    "消息面", "催化", "异动", "大跌", "大涨", "下跌", "上涨",
+    "跌", "涨", "基本面变差", "风险恶化",
+)
+
+_FINANCIAL_SKILLS = {
+    "financial-query",
+    "news-search",
+    "announcement-search",
+    "report-search",
+}
+
 
 def _row_label(row: dict[str, Any]) -> str:
     """Pretty-print a financial-query row for reflection text."""
@@ -375,7 +399,70 @@ def _requested_followup_skills(user_query: str) -> list[str]:
         return ["announcement-search"]
     if has_news:
         return ["news-search"]
+    if any(k in q for k in _ANALYSIS_FOLLOWUP_KEYWORDS):
+        return ["announcement-search", "news-search", "report-search"]
     return []
+
+
+def _skill_available(name: str) -> bool:
+    return bool(REGISTRY.get_spec(name) and REGISTRY.is_enabled(name))
+
+
+def _anysearch_args(user_query: str) -> dict[str, Any]:
+    return {
+        "action": "search",
+        "query": user_query,
+        "domain": "finance",
+        "max_results": 5,
+    }
+
+
+def _infer_empty_result_recovery(
+    *,
+    calls: list[dict[str, Any]],
+    user_query: str,
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """Choose a deterministic next step after an empty code-skill result.
+
+    Recovery order:
+      1. Retry the same financial skill once with the user's original
+         wording when the previous query was a transformed version.
+      2. If that has already been tried, use anysearch as low-priority
+         finance-domain fallback.
+    """
+    if not calls:
+        return (None, None, None)
+    last = calls[-1]
+    last_name = str(last.get("name") or "")
+    if last_name == "anysearch":
+        return (None, None, "anysearch 返回为空，无法继续自动补查")
+
+    if last_name in _FINANCIAL_SKILLS and _skill_available(last_name):
+        last_query = str((last.get("args") or {}).get("query") or "").strip()
+        original_query = (user_query or "").strip()
+        retried_original = any(
+            c.get("name") == last_name
+            and str((c.get("args") or {}).get("query") or "").strip() == original_query
+            for c in calls
+        )
+        if original_query and last_query != original_query and not retried_original:
+            args = dict(last.get("args") or {})
+            args["query"] = original_query
+            return (
+                last_name,
+                args,
+                f"{last_name} 返回为空，先用用户原始问句换一种问法重试",
+            )
+
+    anysearch_called = any(c.get("name") == "anysearch" for c in calls)
+    if not anysearch_called and _skill_available("anysearch"):
+        return (
+            "anysearch",
+            _anysearch_args(user_query),
+            "金融 Skill 返回为空，改用低优先级 anysearch 联网兜底",
+        )
+
+    return (None, None, "工具返回为空数据")
 
 
 def _find_financial_target(

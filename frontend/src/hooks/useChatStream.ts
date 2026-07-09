@@ -295,15 +295,16 @@ export function useChatStream() {
                 const m = [...s.messages];
                 const last = m[m.length - 1];
                 if (last && last.role === "assistant") {
-                  const currentContent = (last.content ?? "").trim();
-                  if (!currentContent) {
-                    m[m.length - 1] = { ...last, content: finalContent };
-                  }
+                  // Always trust the backend's final payload. Streaming
+                  // token_delta can briefly contain leaked think text if a
+                  // model emits malformed tags; message_final is the
+                  // cleaned source of truth.
+                  m[m.length - 1] = { ...last, content: finalContent };
                   if (preamble) {
                     m[m.length - 1] = { ...m[m.length - 1], preamble };
                   }
                 }
-                return { messages: m };
+                return { messages: m, pendingText: finalContent };
               });
             } else if (preamble) {
               useChatStore.setState((s) => {
