@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.agent.nodes.reflector import (
+    _infer_missing_requested_followup,
     _infer_followup_for_list_result,
     _pick_top_row,
     reflector_node,
@@ -61,7 +62,7 @@ def test_followup_announcement_default() -> None:
     )
     assert skill == "announcement-search"
     assert "华勤技术" in args["query"]
-    assert "603296" in args["query"]
+    assert args["query"] == "华勤技术的公告"
     assert row["股票简称"] == "华勤技术"
 
 
@@ -107,12 +108,18 @@ def test_followup_no_match_empty_rows() -> None:
 
 
 def test_followup_no_match_wrong_prev_tool() -> None:
-    """anysearch (which returns strings) shouldn't trigger the chain."""
+    """Only financial-query rows should trigger stock follow-up picking."""
     rows = [_row("1", "茅台", 100)]
     skill, args, row = _infer_followup_for_list_result(
         last_call_name="anysearch",
         user_query="茅台的公告",
         rows=rows,
+    )
+    assert skill is None
+    skill, args, row = _infer_followup_for_list_result(
+        last_call_name="announcement-search",
+        user_query="茅台的公告",
+        rows=[{"name": "admin", "title": "公告A"}],
     )
     assert skill is None
 
@@ -131,6 +138,77 @@ def test_followup_respects_market_cap_rank() -> None:
     )
     assert args is not None
     assert "Big" in args["query"]
+
+
+def test_missing_followup_fetches_report_then_announcement_for_and_query() -> None:
+    calls = [{
+        "name": "financial-query",
+        "args": {"query": "今日涨停股票中市值最大的"},
+        "ok": True,
+        "result": {"data": {"datas": [_row("603296.SH", "华勤技术", 1169.57)]}},
+    }]
+
+    skill, args, row = _infer_missing_requested_followup(
+        calls=calls,
+        user_query="给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+    )
+
+    assert skill == "report-search"
+    assert args == {"query": "华勤技术的研报", "limit": "10", "days": "30"}
+    assert row["股票简称"] == "华勤技术"
+
+    calls.append({
+        "name": "report-search",
+        "args": {"query": "华勤技术的研报", "limit": "10", "days": "30"},
+        "ok": True,
+        "result": {"data": {"reports": [{"title": "研报A"}]}},
+    })
+    skill, args, row = _infer_missing_requested_followup(
+        calls=calls,
+        user_query="给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+    )
+
+    assert skill == "announcement-search"
+    assert args == {"query": "华勤技术的公告", "limit": "10", "days": "30"}
+
+    calls.append({
+        "name": "announcement-search",
+        "args": {"query": "华勤技术的公告", "limit": "10", "days": "30"},
+        "ok": True,
+        "result": {"data": {"announcements": [{"title": "公告A", "author": "admin"}]}},
+    })
+    skill, args, row = _infer_missing_requested_followup(
+        calls=calls,
+        user_query="给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+    )
+
+    assert skill is None and args is None and row is None
+
+
+def test_missing_followup_does_not_treat_admin_as_stock() -> None:
+    calls = [
+        {
+            "name": "financial-query",
+            "args": {},
+            "ok": True,
+            "result": {"data": {"datas": [_row("603296.SH", "华勤技术", 1169.57)]}},
+        },
+        {
+            "name": "announcement-search",
+            "args": {"query": "华勤技术的公告"},
+            "ok": True,
+            "result": {"data": {"announcements": [{"name": "admin", "title": "公告A"}]}},
+        },
+    ]
+
+    skill, args, _ = _infer_missing_requested_followup(
+        calls=calls,
+        user_query="给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+    )
+
+    assert skill == "report-search"
+    assert args is not None
+    assert args["query"] == "华勤技术的研报"
 
 
 # --- end-to-end via reflector_node ----------------------------------
@@ -189,6 +267,42 @@ async def test_reflector_node_emits_need_more_for_stocks_then_announcement() -> 
     # The chosen row should be 贵州茅台 (max market cap among the 3).
     chosen_q = out["next_args_hint"]["query"]
     assert "600519" in chosen_q or "贵州茅台" in chosen_q
+
+
+@pytest.mark.asyncio
+async def test_reflector_node_chains_report_then_announcement_for_and_query() -> None:
+    state = {
+        "user_query": "给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+        "tool_calls": [
+            {
+                "name": "financial-query",
+                "args": {"query": "今日A股涨停股票,按总市值降序排序", "limit": "5"},
+                "ok": True,
+                "result": {
+                    "data": {
+                        "datas": [_row("603296.SH", "华勤技术", 1169.57)],
+                        "code_count": 1,
+                    },
+                    "ok": True,
+                },
+                "error": None,
+                "trace_id": "t1",
+            }
+        ],
+        "rounds_used": 0,
+        "history": [],
+    }
+
+    with patch("app.agent.nodes.reflector.build_chat_model") as mock_build:
+        llm = AsyncMock()
+        llm.ainvoke = AsyncMock()
+        mock_build.return_value = llm
+        out = await reflector_node(state)  # type: ignore[arg-type]
+
+    llm.ainvoke.assert_not_called()
+    assert out["reflection_verdict"] == "need_more"
+    assert out["next_skill_hint"] == "report-search"
+    assert out["next_args_hint"]["query"] == "华勤技术的研报"
 
 
 @pytest.mark.asyncio

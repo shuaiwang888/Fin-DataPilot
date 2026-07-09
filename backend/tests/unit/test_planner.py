@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.agent.nodes.planner import _try_parse_plan, planner_node
+from app.agent.nodes.planner import (
+    _normalize_plan_for_query,
+    _try_parse_plan,
+    planner_node,
+)
 from app.agent.nodes.skill_router import _substitute_placeholders
 
 
@@ -56,6 +60,39 @@ def test_parse_plan_filters_invalid_step_shapes() -> None:
     assert len(parsed["plan"]) == 2
     assert parsed["plan"][0]["target_skill"] == "financial-query"
     assert parsed["plan"][1]["target_skill"] is None
+
+
+def test_normalize_plan_adds_report_and_announcement_for_and_query() -> None:
+    plan = [
+        {"goal": "找股票", "target_skill": "financial-query",
+         "args": {"query": "今日涨停股票中市值最大的"}},
+        {"goal": "查公告", "target_skill": "announcement-search",
+         "args": {"query": "<step_0_top_stock> 最近公告"}},
+    ]
+
+    out = _normalize_plan_for_query(
+        "给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+        plan,
+    )
+
+    assert [s["target_skill"] for s in out] == [
+        "financial-query",
+        "report-search",
+        "announcement-search",
+    ]
+    assert out[1]["args"]["query"] == "<step_0_top_name>的研报"
+    assert out[2]["args"]["query"] == "<step_0_top_name>的公告"
+
+
+def test_normalize_plan_keeps_or_query_as_single_followup() -> None:
+    plan = [
+        {"goal": "找股票", "target_skill": "financial-query", "args": {}},
+        {"goal": "查公告", "target_skill": "announcement-search", "args": {}},
+    ]
+
+    out = _normalize_plan_for_query("市值最大的那只公告或研报", plan)
+
+    assert out == plan
 
 
 # --- planner_node: end-to-end with stubbed LLM ----------------------

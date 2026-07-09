@@ -118,6 +118,22 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     # 公告 / 研报 / 新闻 / 详情". Triggered when:
     #   - last tool was financial-query returning a list
     #   - user query mentions 公告 / 研报 / 新闻 / 详情 / 最新 / 动态
+    missing_skill, missing_args, missing_row = _infer_missing_requested_followup(
+        calls=calls,
+        user_query=user_query,
+    )
+    if missing_skill and missing_args and missing_row is not None:
+        return {
+            "reflection_verdict": "need_more",
+            "reflection": (
+                f"已定位目标股票「{_row_label(missing_row)}」，但用户还需要"
+                f" {missing_skill} 内容，需继续调用该 skill"
+            ),
+            "next_skill_hint": missing_skill,
+            "next_args_hint": missing_args,
+            **_maybe_clear_plan_for_replan("need_more", state),
+        }
+
     pattern_a_skill, pattern_a_args, pattern_a_row = _infer_followup_for_list_result(
         last_call_name=last.get("name", ""),
         user_query=user_query,
@@ -315,6 +331,135 @@ def _pick_top_row(rows: list[dict[str, Any]], user_query: str) -> dict[str, Any]
     return rows[0]
 
 
+def _rows_from_call(call: dict[str, Any]) -> list[dict[str, Any]]:
+    result = call.get("result") or {}
+    if not isinstance(result, dict):
+        return []
+    data = result.get("data") or {}
+    if not isinstance(data, dict):
+        return []
+    rows = (
+        data.get("datas")
+        or data.get("articles")
+        or data.get("announcements")
+        or data.get("reports")
+        or []
+    )
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _requested_followup_skills(user_query: str) -> list[str]:
+    """Return detail skills the user explicitly requested, in call order."""
+    q = user_query or ""
+    has_announcement = any(k in q for k in (
+        "公告", "披露", "财报", "季报", "年报", "业绩", "股东",
+        "announcement", "filing", "earnings",
+    ))
+    has_report = any(k in q for k in (
+        "研报", "研究报告", "券商", "research report",
+    ))
+    has_news = any(k in q for k in ("新闻", "资讯", "动态", "近况", "news", "latest"))
+
+    # In "公告或研报", one vertical source is enough; keep the historic
+    # announcement-first behavior. In "公告和研报", fetch both, with
+    # report first per the product expectation for this chain.
+    if has_announcement and has_report:
+        if any(k in q for k in ("或", "或者", "二选一", "任一")):
+            return ["announcement-search"]
+        return ["report-search", "announcement-search"]
+    if has_report:
+        return ["report-search"]
+    if has_announcement:
+        return ["announcement-search"]
+    if has_news:
+        return ["news-search"]
+    return []
+
+
+def _find_financial_target(
+    calls: list[dict[str, Any]],
+    user_query: str,
+) -> tuple[int, dict[str, Any]] | tuple[None, None]:
+    for idx, call in enumerate(calls):
+        if call.get("name") != "financial-query" or not call.get("ok"):
+            continue
+        target = _pick_top_row(_rows_from_call(call), user_query)
+        if target:
+            return idx, target
+    return None, None
+
+
+def _target_query_term(row: dict[str, Any]) -> str:
+    name = row.get("股票简称") or row.get("简称") or row.get("name") or ""
+    code = row.get("股票代码") or row.get("代码") or row.get("code") or ""
+    return str(name or code).strip()
+
+
+def _followup_args_for_skill(skill: str, row: dict[str, Any]) -> dict[str, Any]:
+    term = _target_query_term(row)
+    if skill == "report-search":
+        query = f"{term}的研报" if term else "研报"
+    elif skill == "announcement-search":
+        query = f"{term}的公告" if term else "公告"
+    else:
+        query = f"{term}的新闻" if term else "新闻"
+    return {"query": query, "limit": "10", "days": "30"}
+
+
+def _followup_completed(
+    calls: list[dict[str, Any]],
+    *,
+    skill: str,
+    financial_idx: int,
+    row: dict[str, Any],
+) -> bool:
+    name = str(row.get("股票简称") or row.get("简称") or row.get("name") or "")
+    code = str(row.get("股票代码") or row.get("代码") or row.get("code") or "")
+    for call in calls[financial_idx + 1:]:
+        if call.get("name") != skill or not call.get("ok"):
+            continue
+        if not _rows_from_call(call):
+            continue
+        args_text = json.dumps(call.get("args", {}), ensure_ascii=False)
+        if (name and name in args_text) or (code and code in args_text):
+            return True
+        if not name and not code:
+            return True
+    return False
+
+
+def _infer_missing_requested_followup(
+    *,
+    calls: list[dict[str, Any]],
+    user_query: str,
+) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]:
+    requested = _requested_followup_skills(user_query)
+    if not requested:
+        return (None, None, None)
+
+    financial_idx, target_row = _find_financial_target(calls, user_query)
+    if financial_idx is None or target_row is None:
+        return (None, None, None)
+
+    if not _target_query_term(target_row):
+        return (None, None, None)
+
+    for skill in requested:
+        if not REGISTRY.get_spec(skill):
+            continue
+        if not _followup_completed(
+            calls,
+            skill=skill,
+            financial_idx=financial_idx,
+            row=target_row,
+        ):
+            return (skill, _followup_args_for_skill(skill, target_row), target_row)
+
+    return (None, None, None)
+
+
 def _infer_followup_for_list_result(
     *,
     last_call_name: str,
@@ -334,10 +479,10 @@ def _infer_followup_for_list_result(
     """
     if not rows or not isinstance(rows, list):
         return (None, None, None)
-    # Only fire when the previous tool produced a list of stocks/entities
-    # (financial-query, news-search, etc). We don't want to chain
-    # search → search, or extract → search.
-    if last_call_name not in ("financial-query", "news-search", "announcement-search", "report-search"):
+    # Only financial-query returns a stock universe from which it is safe
+    # to pick "the top one". Search result rows can contain generic
+    # fields such as author/name="admin"; never treat those as stocks.
+    if last_call_name != "financial-query":
         return (None, None, None)
 
     q = user_query or ""
@@ -352,7 +497,7 @@ def _infer_followup_for_list_result(
     code = target_row.get("股票代码") or target_row.get("code") or target_row.get("代码") or ""
     if not name and not code:
         return (None, None, None)
-    query_term = " ".join(filter(None, [name, code]))
+    query_term = str(name or code)
 
     # Decide which skill to call next. Priority: 公告 > 研报 > 新闻
     # because for "X 的公告或研报" the user typically wants 公告 first
@@ -362,18 +507,18 @@ def _infer_followup_for_list_result(
                               "基本面", "财务", "经营", "公司概况", "资料", "详情",
                               "announcement", "filing", "earnings", "financials")):
         skill = "announcement-search"
-        args: dict[str, Any] = {"query": query_term, "limit": "10", "days": "30"}
+        args: dict[str, Any] = {"query": f"{query_term}的公告", "limit": "10", "days": "30"}
     elif any(kw in q for kw in ("研报", "深度", "解读", "券商", "研究报告", "research", "report")):
         skill = "report-search"
-        args = {"query": query_term, "limit": "10", "days": "30"}
+        args = {"query": f"{query_term}的研报", "limit": "10", "days": "30"}
     elif any(kw in q for kw in ("新闻", "资讯", "动态", "近况", "news", "latest")):
         skill = "news-search"
-        args = {"query": query_term, "limit": "10", "days": "30"}
+        args = {"query": f"{query_term}的新闻", "limit": "10", "days": "30"}
     else:
         # Fallback when the user said e.g. "看看它的最新情况" — pick
         # announcement (broadest of the three).
         skill = "announcement-search"
-        args = {"query": query_term, "limit": "10", "days": "30"}
+        args = {"query": f"{query_term}的公告", "limit": "10", "days": "30"}
 
     # Make sure the target skill is actually registered (e.g. user
     # disabled it in the UI) — bail if not, so the LLM gets a clean

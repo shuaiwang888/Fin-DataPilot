@@ -157,3 +157,100 @@ async def test_graph_propagates_reflector_hint_to_router() -> None:
         f"router LLM called {router_llm.ainvoke.call_count} times; "
         f"expected 0. Plan-driven router should not call LLM."
     )
+
+
+@pytest.mark.asyncio
+async def test_graph_executes_report_and_announcement_for_and_query() -> None:
+    """Regression for "今日涨停 + 市值最大 + 公告和研报".
+
+    The planner may under-plan and only include announcement-search.
+    The normalized plan plus deterministic reflector should still execute:
+    financial-query → report-search → announcement-search.
+    """
+    underplanned = [
+        {"goal": "find top stock", "target_skill": "financial-query",
+         "args": {"query": "今日A股涨停股票,按总市值降序排序", "limit": "5"}},
+        {"goal": "get announcements", "target_skill": "announcement-search",
+         "args": {"query": "<step_0_top_name>的公告", "days": "30", "limit": "10"}},
+    ]
+    planner_response = json.dumps({"plan": underplanned, "rationale": "underplanned"})
+    sufficient_response = json.dumps({"verdict": "sufficient", "reason": "all covered"})
+
+    with patch("app.agent.nodes.skill_router.build_chat_model") as mock_router_build, \
+         patch("app.agent.nodes.reflector.build_chat_model") as mock_refl_build, \
+         patch("app.agent.nodes.planner.build_chat_model") as mock_planner_build, \
+         patch("app.agent.nodes.executor.REGISTRY") as mock_executor_reg:
+        router_llm = AsyncMock()
+        router_llm.ainvoke = AsyncMock()
+        mock_router_build.return_value = router_llm
+        refl_llm = AsyncMock()
+        refl_llm.ainvoke = AsyncMock(return_value=type(
+            "R", (), {"content": sufficient_response}
+        )())
+        mock_refl_build.return_value = refl_llm
+        planner_llm = AsyncMock()
+        planner_llm.ainvoke = AsyncMock(return_value=type(
+            "R", (), {"content": planner_response}
+        )())
+        mock_planner_build.return_value = planner_llm
+
+        async def fake_dispatch(name: str, args: dict[str, Any]):
+            from app.skills.base import ToolResult
+            if name == "financial-query":
+                return ToolResult(
+                    tool=name, ok=True,
+                    data={
+                        "datas": [
+                            {"股票代码": "603296.SH", "股票简称": "华勤技术", "总市值": 1169.57, "涨跌幅": 10.0},
+                        ],
+                        "code_count": 1,
+                    },
+                )
+            if name == "report-search":
+                return ToolResult(
+                    tool=name, ok=True,
+                    data={"reports": [{"title": "研报A", "summary": "内容"}], "count": 1},
+                )
+            if name == "announcement-search":
+                return ToolResult(
+                    tool=name, ok=True,
+                    data={"announcements": [{"title": "公告A", "author": "admin"}], "count": 1},
+                )
+            return ToolResult(tool=name, ok=False, error="not stubbed")
+        mock_executor_reg.dispatch = fake_dispatch
+
+        graph = get_graph()
+        init = {
+            "user_query": "给出今日涨停的股票中，市值最大的那只股票，近期的公告和研报",
+            "session_id": "s_test",
+            "message_id": "",
+            "history": [],
+            "tool_calls": [],
+            "rounds_used": 0,
+            "reflection_verdict": "need_more",
+            "trace_id": "t_init",
+            "plan": [],
+            "pending_step_index": 0,
+            "reflection": "",
+            "final_answer": "",
+            "error": None,
+            "next_skill_hint": None,
+            "next_args_hint": None,
+        }
+        final_state: dict[str, Any] = dict(init)
+        async for ev in graph.astream(init, config={"recursion_limit": 50}):
+            for _, node_out in ev.items():
+                if isinstance(node_out, dict):
+                    final_state.update(node_out)
+
+    calls = final_state.get("tool_calls", [])
+    assert [c.get("name") for c in calls] == [
+        "financial-query",
+        "report-search",
+        "announcement-search",
+    ]
+    assert calls[1]["args"]["query"] == "华勤技术的研报"
+    assert calls[2]["args"]["query"] == "华勤技术的公告"
+    assert "admin" not in calls[1]["args"]["query"]
+    assert "admin" not in calls[2]["args"]["query"]
+    router_llm.ainvoke.assert_not_called()
