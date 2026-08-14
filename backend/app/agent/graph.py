@@ -18,10 +18,12 @@ into a sequence of plan steps. The skill router then walks through
 the plan without re-asking the LLM, with the reflector deciding
 when to stop or when to trigger a re-plan.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from langgraph.graph import END, StateGraph
 
@@ -30,7 +32,7 @@ from app.agent.nodes.planner import planner_node
 from app.agent.nodes.reflector import reflector_node
 from app.agent.nodes.skill_router import skill_router_node
 from app.agent.nodes.synthesizer import synthesize
-from app.agent.state import AgentState, EV_DONE, EV_ERROR
+from app.agent.state import EV_DONE, EV_ERROR, AgentState
 from app.config import get_settings
 from app.skills.registry import REGISTRY
 
@@ -48,51 +50,60 @@ def _build_graph() -> Any:
     g.set_entry_point("planner")
     g.add_edge("planner", "skill_router")  # planner always feeds into the router
 
-    # After router: if final_answer was set, go to synthesizer; else go to executor
+    # Router explicitly says whether it scheduled a fresh tool call, skipped a
+    # plan step, or finished. Never infer this from `tool_calls`: doing so made
+    # a skipped step execute the last completed tool for a second time.
     def _after_router(state: AgentState) -> str:
-        if state.get("error"):
-            return "synthesizer"
-        if state.get("final_answer"):
-            return "synthesizer"
-        return "executor"
+        action = state.get("router_action", "finish")
+        if action == "execute":
+            return "executor"
+        if action == "continue":
+            return "skill_router"
+        return "synthesizer"
 
-    g.add_conditional_edges("skill_router", _after_router, {
-        "executor": "executor",
-        "synthesizer": "synthesizer",
-    })
+    g.add_conditional_edges(
+        "skill_router",
+        _after_router,
+        {
+            "executor": "executor",
+            "skill_router": "skill_router",
+            "synthesizer": "synthesizer",
+        },
+    )
 
-    # After executor: always go to reflector
+    # After executor: exactly one reflection takes place for each Skill
+    # response. The reflector decides whether the next decomposed sub-task is
+    # necessary before the router can schedule it.
     g.add_edge("executor", "reflector")
 
-    # After reflector: three paths.
-    #   need_more + plan still has steps → skill_router (advance plan)
-    #   need_more + plan exhausted (cleared by reflector) → planner (re-plan)
-    #   sufficient / failed / rounds cap hit → synthesizer
+    # After reflector: continue only while the hard Skill-call budget remains.
     def _after_reflector(state: AgentState) -> str:
         verdict = state.get("reflection_verdict", "sufficient")
-        rounds = state.get("rounds_used", 0)
-        max_rounds = get_settings().agent_max_reflect_rounds
-        if verdict == "need_more" and rounds < max_rounds:
+        calls_used = state.get("skill_calls_used", len(state.get("tool_calls", [])))
+        max_calls = get_settings().agent_max_skill_calls
+        if verdict == "need_more" and calls_used < max_calls:
             plan = state.get("plan") or []
             if not plan:
-                # Plan was cleared (exhausted) → re-plan
+                # Plan was cleared (exhausted) → re-plan with all evidence.
                 return "planner"
             return "skill_router"
         return "synthesizer"
 
-    g.add_conditional_edges("reflector", _after_reflector, {
-        "planner": "planner",
-        "skill_router": "skill_router",
-        "synthesizer": "synthesizer",
-    })
+    g.add_conditional_edges(
+        "reflector",
+        _after_reflector,
+        {
+            "planner": "planner",
+            "skill_router": "skill_router",
+            "synthesizer": "synthesizer",
+        },
+    )
 
     g.add_edge("synthesizer", END)
 
-    # Default LangGraph recursion limit is 25. With the multi-step
-    # plan + re-plan flow + anysearch being a slightly slower skill,
-    # we hit it on complex questions. Pass the limit via the config
-    # dict at astream time (LangGraph 0.x's .compile() doesn't accept
-    # a recursion_limit kwarg; the config goes on astream/ainvoke).
+    # Default LangGraph recursion limit is 25. A full 8-call flow can use
+    # planner/router/executor/reflector nodes multiple times, so reserve room
+    # for one re-plan without allowing unbounded tool work.
     return g.compile()
 
 
@@ -116,7 +127,6 @@ async def run_agent_stream(
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events for a single user turn."""
     from app.agent.state import (
-        EV_MESSAGE_FINAL,
         EV_REFLECTION,
         EV_THINK,
         EV_TOOL_CALL,
@@ -135,22 +145,24 @@ async def run_agent_stream(
         "session_id": session_id,
         "history": history,
         "tool_calls": [],
-        "rounds_used": 0,
+        "skill_calls_used": 0,
         "reflection_verdict": "need_more",
         "trace_id": trace_id,
         "plan": [],
         "pending_step_index": 0,
         "next_skill_hint": None,
         "next_args_hint": None,
+        "router_action": "continue",
     }
-    yield {"event": EV_THINK, "data": {"step": "entry", "text": f"开始处理：{user_query}", "trace_id": trace_id}}
+    yield {
+        "event": EV_THINK,
+        "data": {"step": "entry", "text": f"开始处理：{user_query}", "trace_id": trace_id},
+    }
 
     graph = get_graph()
     final_state: AgentState = dict(init_state)
 
     try:
-        # Bump LangGraph's default 25 recursion limit to 50 for
-        # multi-step plan + re-plan flows. Most queries stay <10.
         async for event in graph.astream(init_state, config={"recursion_limit": 50}):
             # event is dict {node_name: node_output}
             for node_name, node_out in event.items():
@@ -169,14 +181,13 @@ async def run_agent_stream(
                         "event": EV_THINK,
                         "data": {
                             "step": "plan",
-                            "text": f"已规划 {len(plan)} 步：{' → '.join(steps)}" + (
-                                f"\n理由：{rationale}" if rationale else ""
-                            ),
+                            "text": f"已规划 {len(plan)} 步：{' → '.join(steps)}"
+                            + (f"\n理由：{rationale}" if rationale else ""),
                         },
                     }
                 if node_name == "skill_router":
-                    tc = (node_out.get("tool_calls") or [])
-                    if tc and tc[-1].get("result") is None:
+                    tc = node_out.get("tool_calls") or []
+                    if node_out.get("router_action") == "execute" and tc:
                         last = tc[-1]
                         yield {
                             "event": EV_TOOL_CALL,
@@ -186,13 +197,13 @@ async def run_agent_stream(
                                 "trace_id": last.get("trace_id", ""),
                             },
                         }
-                    if node_out.get("final_answer"):
+                    if node_out.get("router_action") == "finish":
                         yield {
                             "event": EV_THINK,
-                            "data": {"step": "router_final", "text": "直接生成最终答案"},
+                            "data": {"step": "finalize", "text": "数据收集完成，正在汇总最终回答"},
                         }
                 elif node_name == "executor":
-                    tc = (node_out.get("tool_calls") or [])
+                    tc = node_out.get("tool_calls") or []
                     if tc:
                         last = tc[-1]
                         yield {
@@ -216,22 +227,15 @@ async def run_agent_stream(
                     }
     except Exception as exc:  # noqa: BLE001
         logger.exception("agent graph execution failed")
-        yield {"event": EV_ERROR, "data": {"message": f"Agent 执行失败: {exc}", "trace_id": trace_id}}
-
-    # If the router produced a final answer directly (no synthesizer streaming)
-    if final_state.get("final_answer") and not any(
-        True for _ in []
-    ):  # placeholder check
         yield {
-            "event": EV_MESSAGE_FINAL,
-            "data": {
-                "content": final_state["final_answer"],
-                "tool_calls": final_state.get("tool_calls", []),
-            },
+            "event": EV_ERROR,
+            "data": {"message": f"Agent 执行失败: {exc}", "trace_id": trace_id},
         }
-    else:
-        # Stream synthesizer output
-        async for ev in synthesize(final_state):
-            yield ev
+
+    # All exits, including router guards and failures, go through the one
+    # synthesizer. This keeps user-facing content separate from execution
+    # trace and ensures exactly one final-answer event per turn.
+    async for ev in synthesize(final_state):
+        yield ev
 
     yield {"event": EV_DONE, "data": {"trace_id": trace_id}}

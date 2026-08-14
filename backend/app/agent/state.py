@@ -1,7 +1,9 @@
 """LangGraph AgentState and streaming events."""
+
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
+
 from typing_extensions import TypedDict
 
 
@@ -36,7 +38,13 @@ class AgentState(TypedDict, total=False):
     tool_calls: list[ToolCallRecord]
     reflection: str
     reflection_verdict: Literal["sufficient", "need_more", "failed"]
-    rounds_used: int
+    # Number of Skills actually dispatched for this user question. This
+    # is deliberately distinct from reflection/re-plan rounds: a successful
+    # call must still count towards the hard per-question safety cap.
+    skill_calls_used: int
+    # Router output is explicit so a skipped/invalid plan step cannot fall
+    # through to executor and accidentally run the previous tool again.
+    router_action: Literal["execute", "continue", "finish"]
     # next_skill_hint / next_args_hint are populated by the reflector
     # when it decides the previous step didn't cover the question and
     # consumed by the skill router on its next turn. They MUST be

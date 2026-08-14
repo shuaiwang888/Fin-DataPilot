@@ -1,4 +1,5 @@
 """Health and readiness endpoints."""
+
 from __future__ import annotations
 
 import os
@@ -29,7 +30,7 @@ async def health(request: Request) -> dict:
         "iwencai_key_configured": settings.has_iwencai_key,
         "agent": {
             "enabled": True,
-            "max_reflect_rounds": settings.agent_max_reflect_rounds,
+            "max_skill_calls": settings.agent_max_skill_calls,
             "max_parallel_skills": settings.agent_max_parallel_skills,
         },
         "tools": {
@@ -120,8 +121,7 @@ async def diag_anysearch() -> dict:
     settings = get_settings()
     info: dict = {
         "anysearch_api_key_configured": bool(
-            settings.anysearch_api_key
-            and settings.anysearch_api_key != "your-anysearch-key-here"
+            settings.anysearch_api_key and settings.anysearch_api_key != "your-anysearch-key-here"
         ),
         "anysearch_skill_dir_env": settings.anysearch_skill_dir or None,
         "anysearch_dir_resolved": settings.anysearch_dir or None,
@@ -140,11 +140,13 @@ async def diag_anysearch() -> dict:
         if not p:
             continue
         path = Path(p)
-        info["candidates"].append({
-            "label": label,
-            "path": p,
-            "exists": path.is_dir(),
-        })
+        info["candidates"].append(
+            {
+                "label": label,
+                "path": p,
+                "exists": path.is_dir(),
+            }
+        )
 
     # Probe what's actually on disk so we know whether the bundled
     # skill is in the image at all.
@@ -156,15 +158,17 @@ async def diag_anysearch() -> dict:
         )
         target = cwd_skills / "anysearch-skill"
         if target.is_dir():
-            info["anysearch_skill_top_level"] = sorted(
-                entry.name for entry in target.iterdir()
-            )[:20]
+            info["anysearch_skill_top_level"] = sorted(entry.name for entry in target.iterdir())[
+                :20
+            ]
             cli = target / "scripts" / "anysearch_cli.py"
             info["cli_exists"] = cli.exists()
             if cli.exists():
                 info["cli_executable"] = os.access(cli, os.X_OK)
-            info["runtime_conf"] = (target / "runtime.conf").read_text(
-                encoding="utf-8", errors="replace"
-            ) if (target / "runtime.conf").exists() else None
+            info["runtime_conf"] = (
+                (target / "runtime.conf").read_text(encoding="utf-8", errors="replace")
+                if (target / "runtime.conf").exists()
+                else None
+            )
     info["anysearch_in_registry"] = REGISTRY.get_spec("anysearch") is not None
     return info

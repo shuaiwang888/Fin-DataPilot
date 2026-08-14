@@ -248,3 +248,53 @@ async def test_router_does_not_bail_with_one_zero() -> None:
         out = await skill_router_node(state)  # type: ignore[arg-type]
     # Only 1 zero → not yet looping → LLM path
     llm.ainvoke.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_router_stops_after_eight_skill_calls_before_asking_the_llm() -> None:
+    """The hard cap applies to successful calls too, not just failures."""
+    calls = [
+        _call(
+            "financial-query" if i % 2 == 0 else "news-search",
+            {"query": f"query-{i}"},
+            rows=[{"name": f"row-{i}"}],
+        )
+        for i in range(8)
+    ]
+    state: dict[str, Any] = {
+        "user_query": "复杂问题",
+        "tool_calls": calls,
+        "history": [],
+        "plan": [],
+        "pending_step_index": 0,
+        "next_skill_hint": None,
+        "next_args_hint": None,
+        "skill_calls_used": 8,
+    }
+    with patch("app.agent.nodes.skill_router.build_chat_model") as mock_build:
+        out = await skill_router_node(state)  # type: ignore[arg-type]
+
+    assert out["router_action"] == "finish"
+    assert "8 次数据查询" in out["final_answer"]
+    mock_build.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_plan_call_receives_trace_id_before_executor_runs() -> None:
+    """SSE tool_call and tool_result can be joined on the same trace id."""
+    state: dict[str, Any] = {
+        "user_query": "查数据",
+        "tool_calls": [],
+        "history": [],
+        "plan": [
+            {"goal": "查询", "target_skill": "financial-query", "args": {"query": "贵州茅台"}},
+        ],
+        "pending_step_index": 0,
+        "next_skill_hint": None,
+        "next_args_hint": None,
+    }
+
+    out = await skill_router_node(state)  # type: ignore[arg-type]
+
+    assert out["router_action"] == "execute"
+    assert out["tool_calls"][0]["trace_id"]

@@ -9,6 +9,8 @@ interface Props {
 
 const stepLabel: Record<string, string> = {
   entry: "入口",
+  plan: "任务拆解",
+  finalize: "汇总",
   router_final: "直接回答",
   reflect: "反思",
   synth_reason: "思考",

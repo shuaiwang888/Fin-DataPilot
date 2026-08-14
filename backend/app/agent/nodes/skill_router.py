@@ -1,4 +1,5 @@
 """Skill router node: ask the LLM which skill to call next (or stop)."""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +14,7 @@ from app.agent.state import AgentState
 from app.config import get_settings
 from app.llm import build_chat_model
 from app.skills.registry import REGISTRY
+from app.utils.trace import generate_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ def _result_has_zero_rows(result: Any) -> bool:
 
 
 def _loop_bail(skill: str, reason_detail: str) -> dict[str, Any]:
-    """Return the standard "loop detected" final_answer payload."""
+    """Stop the execution loop and leave synthesis an honest hand-off note."""
     return {
         "final_answer": (
             f"已对 `{skill}` {reason_detail}，仍未拿到有效数据。"
@@ -53,6 +55,20 @@ def _loop_bail(skill: str, reason_detail: str) -> dict[str, Any]:
         ),
         "reflection_verdict": "failed",
         "error": f"loop on {skill}: {reason_detail}",
+        "router_action": "finish",
+    }
+
+
+def _pending_call(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Create a call record whose ID is stable across call/result SSE events."""
+    return {
+        "name": name,
+        "args": args,
+        "trace_id": generate_trace_id(),
+        "result": None,
+        "ok": False,
+        "duration_ms": 0,
+        "error": None,
     }
 
 
@@ -93,6 +109,19 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     settings = get_settings()
     previous_results = state.get("tool_calls", [])
 
+    # This is a hard *tool dispatch* cap, not a reflection cap. Successful
+    # calls count too; otherwise a complex re-plan can make unbounded API
+    # calls while every individual result looks healthy.
+    if len(previous_results) >= settings.agent_max_skill_calls:
+        return {
+            "final_answer": (
+                f"已完成最多 {settings.agent_max_skill_calls} 次数据查询。"
+                "以下结论只基于当前已取得的数据；未覆盖的部分会明确说明。"
+            ),
+            "reflection_verdict": "sufficient",
+            "router_action": "finish",
+        }
+
     # ---- Loop guards. Catches three stuck-on-one-thing failure modes:
     #
     #   1. **Identical-args loop**: last 2 tool_calls are byte-for-byte
@@ -112,11 +141,9 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         # (1) byte-identical
         if len(previous_results) >= 2:
             prev = previous_results[-2]
-            if (
-                last_name == prev.get("name")
-                and json.dumps(last.get("args", {}), sort_keys=True, ensure_ascii=False)
-                == json.dumps(prev.get("args", {}), sort_keys=True, ensure_ascii=False)
-            ):
+            if last_name == prev.get("name") and json.dumps(
+                last.get("args", {}), sort_keys=True, ensure_ascii=False
+            ) == json.dumps(prev.get("args", {}), sort_keys=True, ensure_ascii=False):
                 logger.warning("router: identical-args loop on %s; bailing", last_name)
                 return _loop_bail(last_name, "args 完全相同")
 
@@ -125,14 +152,12 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
             tail = previous_results[-3:]
             if all(c.get("name") == last_name for c in tail):
                 # Compute how many of the last 3 returned 0 rows.
-                zero_count = sum(
-                    1 for c in tail
-                    if _result_has_zero_rows(c.get("result"))
-                )
+                zero_count = sum(1 for c in tail if _result_has_zero_rows(c.get("result")))
                 if zero_count >= 2:
                     logger.warning(
                         "router: same-skill(%s) loop, last 3 had %d zero-result calls; bailing",
-                        last_name, zero_count,
+                        last_name,
+                        zero_count,
                     )
                     return _loop_bail(
                         last_name,
@@ -151,19 +176,10 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     ):
         return {
             "pending_step_index": state.get("pending_step_index", 0),
-            "tool_calls": previous_results + [
-                {
-                    "name": hint_skill,
-                    "args": hint_args,
-                    "trace_id": "",
-                    "result": None,
-                    "ok": False,
-                    "duration_ms": 0,
-                    "error": None,
-                }
-            ],
+            "tool_calls": previous_results + [_pending_call(hint_skill, hint_args)],
             "next_skill_hint": None,
             "next_args_hint": None,
+            "router_action": "execute",
         }
 
     # ---- Fast path #2: consume the next plan step ----
@@ -182,16 +198,21 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         if skill is None:
             logger.info(
                 "router: plan step %d has null target_skill (goal=%r); falling through to LLM path",
-                pending_idx, step.get("goal", ""),
+                pending_idx,
+                step.get("goal", ""),
             )
             return {
                 "pending_step_index": pending_idx + 1,
                 # Don't reset plan — other valid steps may follow.
+                "router_action": "continue",
             }
         if not REGISTRY.get_spec(skill) or not REGISTRY.is_enabled(skill):
-            logger.warning("router: plan step %d references invalid skill %r, skipping", pending_idx, skill)
+            logger.warning(
+                "router: plan step %d references invalid skill %r, skipping", pending_idx, skill
+            )
             return {
                 "pending_step_index": pending_idx + 1,
+                "router_action": "continue",
             }
         args = _substitute_placeholders(
             step.get("args", {}),
@@ -199,35 +220,22 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         )
         return {
             "pending_step_index": pending_idx + 1,
-            "tool_calls": previous_results + [
-                {
-                    "name": skill,
-                    "args": args,
-                    "trace_id": "",
-                    "result": None,
-                    "ok": False,
-                    "duration_ms": 0,
-                    "error": None,
-                }
-            ],
+            "tool_calls": previous_results + [_pending_call(skill, args)],
+            "router_action": "execute",
         }
 
     # ---- LLM path ----
     llm = build_chat_model(settings, temperature=0.0)
 
     history = state.get("history", [])
-    history_text = "\n".join(
-        f"[{m['role']}] {m['content']}" for m in history[-10:]
-    )
+    history_text = "\n".join(f"[{m['role']}] {m['content']}" for m in history[-10:])
 
     user_query = state.get("user_query", "")
-    rounds = state.get("rounds_used", 0)
-
     user_prompt = (
         f"对话历史（最近 10 条）：\n{history_text or '（无）'}\n\n"
         f"用户最新问题：{user_query}\n\n"
         f"已完成的工具调用：{len(previous_results)} 次\n"
-        f"反思轮数：{rounds}/{settings.agent_max_reflect_rounds}\n\n"
+        f"最多还可调用：{settings.agent_max_skill_calls - len(previous_results)} 次\n\n"
         "请按 system prompt 中的契约，输出下一步的 tool_call JSON，或者直接输出最终答案。"
     )
 
@@ -240,6 +248,7 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         return {
             "reflection_verdict": "failed",
             "error": f"LLM call failed: {exc}",
+            "router_action": "finish",
         }
 
     content = resp.content if isinstance(resp.content, str) else str(resp.content)
@@ -249,6 +258,7 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         return {
             "final_answer": content,
             "reflection_verdict": "sufficient",
+            "router_action": "finish",
         }
 
     name = parsed.get("name", "")
@@ -259,34 +269,29 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
             "reflection_verdict": "failed",
             "error": f"LLM requested unknown skill: {name}",
             "final_answer": f"抱歉，AI 选择的工具 `{name}` 不存在或已禁用。请换个问法或启用对应 Skill。",
+            "router_action": "finish",
         }
     if not REGISTRY.is_enabled(name):
         return {
             "reflection_verdict": "failed",
             "error": f"LLM requested disabled skill: {name}",
             "final_answer": f"抱歉，工具 `{name}` 当前已被禁用。请在前端 Skill 管理中启用后再试。",
+            "router_action": "finish",
         }
 
     return {
         "pending_step_index": state.get("pending_step_index", 0),
-        "tool_calls": previous_results + [
-            {
-                "name": name,
-                "args": args,
-                "trace_id": "",
-                "result": None,
-                "ok": False,
-                "duration_ms": 0,
-                "error": None,
-            }
-        ],
+        "tool_calls": previous_results + [_pending_call(name, args)],
+        "router_action": "execute",
     }
 
 
 # ---- Plan placeholder substitution ------------------------------------
 
 
-def _substitute_placeholders(args: dict[str, Any], prior_calls: list[dict[str, Any]]) -> dict[str, Any]:
+def _substitute_placeholders(
+    args: dict[str, Any], prior_calls: list[dict[str, Any]]
+) -> dict[str, Any]:
     """Replace `<step_N_xxx>` placeholders in args with values from
     the Nth prior call's result.
 
@@ -310,9 +315,16 @@ def _substitute_placeholders(args: dict[str, Any], prior_calls: list[dict[str, A
         data = (call.get("result") or {}).get("data") or {}
         rows: list[dict[str, Any]] = []
         if isinstance(data, dict):
-            rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
+            rows = (
+                data.get("datas")
+                or data.get("articles")
+                or data.get("announcements")
+                or data.get("reports")
+                or []
+            )
         if not isinstance(rows, list) or not rows:
             return ""
+
         # Pick the row with the highest market cap (or first by default).
         def _num(r: dict) -> float:
             for k in ("总市值", "A股市值", "总市值(亿元)", "market_cap"):
@@ -324,6 +336,7 @@ def _substitute_placeholders(args: dict[str, Any], prior_calls: list[dict[str, A
                 except (TypeError, ValueError):
                     continue
             return 0.0
+
         rows_sorted = sorted(rows, key=_num, reverse=True)
         top = rows_sorted[0]
         name = top.get("股票简称") or top.get("name") or top.get("简称") or ""

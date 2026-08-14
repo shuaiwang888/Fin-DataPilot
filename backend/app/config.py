@@ -72,7 +72,9 @@ class Settings(BaseSettings):
     max_sessions_per_user: int = 50
 
     # ===== Agent =====
-    agent_max_reflect_rounds: int = 8
+    # Hard per-user-question cap. Every dispatch counts, including successful
+    # calls, so a re-planning loop cannot make unbounded external requests.
+    agent_max_skill_calls: int = 8
     agent_max_parallel_skills: int = 3
     agent_enable_reflection: bool = True
 
