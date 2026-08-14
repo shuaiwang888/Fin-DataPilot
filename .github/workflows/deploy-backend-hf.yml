@@ -23,18 +23,31 @@ jobs:
       - name: Install deploy key
         env:
           HF_SSH_PRIVATE_KEY: ${{ secrets.HF_SSH_PRIVATE_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
+          # HTTPS is the preferred path when a scoped HF token is available;
+          # it needs no SSH bootstrap and avoids an unnecessary network check.
+          if [[ -n "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is configured; using HTTPS authentication."
+            exit 0
+          fi
+
+          if [[ -z "${HF_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::warning::Neither HF_TOKEN nor HF_SSH_PRIVATE_KEY is configured. Deployment will fail with an authentication error."
+            exit 0
+          fi
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          # Normalise line endings (strip \r) and write the key
-          printf '%s' "$HF_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          # Normalise line endings (strip \r) and write the key.
+          printf '%s' "$HF_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Configure git to use this key. GitHub's SSH host key is pinned
-          # rather than accepted dynamically during a deployment.
-          ssh-keyscan -H hf.co >> ~/.ssh/known_hosts
+          # HF does not expose SSH on every CI network, so avoid a separate
+          # ssh-keyscan call. In this fresh ephemeral runner accept the first
+          # key observed for hf.co and retain it for the duration of the job.
           git config --global core.sshCommand \
-            "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+            "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           echo "✓ deploy key installed"
 
       - name: Deploy
