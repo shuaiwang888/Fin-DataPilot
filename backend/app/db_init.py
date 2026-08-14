@@ -25,8 +25,15 @@ async def init_db() -> None:
     elif settings.is_hf_space:
         db_path = Path(settings.persistent_db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        is_real_volume = _is_persistent_mount("/data")
-        if not is_real_volume:
+        is_data_volume = db_path.parent == Path("/data")
+        is_real_volume = is_data_volume and _is_persistent_mount("/data")
+        if not is_data_volume:
+            logger.warning(
+                "DB backend: /data is not writable; using ephemeral SQLite at %s. "
+                "History will be lost on restart. Enable HF persistent storage or configure Turso.",
+                db_path,
+            )
+        elif not is_real_volume:
             logger.warning(
                 "DB backend: HF Space detected, but /data is NOT a persistent "
                 "mount. History will be lost on every restart. → Fix: open the "

@@ -18,13 +18,15 @@ Tests: `python -m pytest tests/ -q`
 
 This backend is deployed to a HF Space via `.github/workflows/deploy-backend-hf.yml`.
 
-### ⚠️ Required: enable Persistent Storage
+### Recommended: enable Persistent Storage
 
 The Space's `findatapilot.db` lives in `/data/findatapilot.db`. That path is only
 persistent across rebuilds **if the Space has Persistent Storage enabled**.
 
-Without it, every Space rebuild / restart wipes the database and you lose
-all chat history.
+If `/data` is unavailable or owned by the host, the backend starts with an
+ephemeral writable directory instead of failing. That keeps the API available,
+but every Space rebuild / restart loses chat history. Enable persistent storage
+or configure Turso for durable history.
 
 **How to enable:**
 
@@ -76,8 +78,9 @@ The backend logs its DB location on startup. Look for one of these:
 - `DB backend: SQLite at /data/findatapilot.db (HF Space, persistent=True)` ✅
 - `DB backend: SQLite at /data/findatapilot.db (HF Space, persistent=False)` ⚠️
   Persistent storage NOT enabled; will lose data on restart.
-- `DB backend: SQLite at /data/...` then `RuntimeError: /data is not writable` ❌
-  Persistent storage path exists but is read-only — check Space tier.
+- `DB backend: /data is not writable; using ephemeral SQLite ...` ⚠️
+  The service is available, but history will be lost on restart. Enable
+  persistent storage or configure Turso.
 
 ### Switching to Turso (libSQL) — optional, for multi-instance setups
 

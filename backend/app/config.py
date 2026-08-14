@@ -9,6 +9,19 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _is_writable_directory(path: Path) -> bool:
+    """Create and probe a directory without leaving a test artifact behind."""
+    probe = path / ".findatapilot-write-probe"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with open(probe, "ab"):
+            pass
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment + .env."""
 
@@ -49,6 +62,9 @@ class Settings(BaseSettings):
     turso_database_url: str = ""
     turso_auth_token: str = ""
     local_sqlite_path: str = "./data/findatapilot.db"
+    # Used only when an HF Space has no writable persistent /data volume.
+    # The fallback keeps the service available but is erased on a restart.
+    hf_ephemeral_data_path: str = "/tmp/findatapilot"
 
     # ===== User-uploaded skills =====
     # Skills installed at runtime via POST /api/skills/upload live under
@@ -142,35 +158,31 @@ class Settings(BaseSettings):
           1. If `turso_database_url` is set → that's remote, this
              property is irrelevant (engine is built from `database_url`
              which prefers Turso).
-          2. If we're on HF Space → MUST be /data/findatapilot.db.
-             We probe writability up front and raise if it fails, so a
-             misconfigured Space is loud, not silent.
+          2. If we're on HF Space → /data/findatapilot.db when that
+             persistent volume is writable; otherwise a writable ephemeral
+             directory, so a mount-permission change cannot take the API down.
           3. Otherwise → the configured local path (./data/...).
 
-        Note: HF Space persistent storage must be enabled in the Space's
-        Settings page, otherwise /data is wiped on every rebuild just
-        like any other container path. The startup log
-        (`Database tables ready at ...`) prints the resolved path —
-        check it matches `/data/...` on HF.
+        The startup log prints the resolved path. On Hugging Face, configure
+        persistent storage (or Turso) whenever user history must survive a
+        restart; the fallback path intentionally does not promise durability.
         """
         if self.is_hf_space:
-            hf_db = Path("/data/findatapilot.db")
-            try:
-                hf_db.parent.mkdir(parents=True, exist_ok=True)
-                # Real write test — mkdir alone succeeds even on
-                # non-persistent /data, but open(O_CREAT) doesn't.
-                with open(hf_db, "ab") as _f:
-                    pass
-                return str(hf_db)
-            except OSError as exc:
-                # Loud failure: better to crash on startup than lose
-                # the user's history on the next restart.
-                raise RuntimeError(
-                    f"/data is not writable on this HF Space (HF persistent "
-                    f"storage must be enabled in the Space's Settings). "
-                    f"Underlying error: {exc}"
-                ) from exc
+            return str(self.hf_storage_dir / "findatapilot.db")
         return self.local_sqlite_path
+
+    @property
+    def hf_storage_dir(self) -> Path:
+        """Return writable HF storage, preferring the durable `/data` mount."""
+        persistent = Path("/data")
+        if _is_writable_directory(persistent):
+            return persistent
+
+        fallback = Path(self.hf_ephemeral_data_path)
+        fallback.mkdir(parents=True, exist_ok=True)
+        if not _is_writable_directory(fallback):
+            raise RuntimeError(f"No writable data directory is available: {fallback}")
+        return fallback
 
     @property
     def user_skills_dir(self) -> str:
@@ -178,7 +190,8 @@ class Settings(BaseSettings):
         Space rebuilds, so we use /data/user_skills on HF Space and
         ./data/user_skills locally. Directory is created on first access.
         """
-        d = Path("/data/user_skills") if self.is_hf_space else Path(self.local_user_skills_path)
+        base = self.hf_storage_dir if self.is_hf_space else Path(self.local_user_skills_path)
+        d = base / "user_skills" if self.is_hf_space else base
         d.mkdir(parents=True, exist_ok=True)
         return str(d)
 

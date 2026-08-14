@@ -1,6 +1,8 @@
 """Persistence-path resolution: the DB must land on the right volume."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
@@ -32,48 +34,32 @@ def test_local_dev_uses_local_path(monkeypatch, tmp_path):
     assert s.persistent_db_path == str(local)
 
 
-def test_hf_space_uses_data_path(monkeypatch, tmp_path):
-    """On HF Space, persistent_db_path must resolve to /data/...db.
-
-    We can't safely run the real write probe on /data in CI, so we
-    patch persistent_db_path to be readable-only, then check that the
-    HF path is the one chosen.
-    """
+def test_hf_space_uses_data_path_when_writable(monkeypatch):
+    """A writable HF persistent mount is always preferred."""
     monkeypatch.setenv("SPACE_ID", "owner/space-name")
+    monkeypatch.setattr("app.config._is_writable_directory", lambda _path: True)
 
     from app.config import Settings
 
     s = Settings()
     assert s.is_hf_space is True
-    # On a real HF Space, the write probe runs and either returns
-    # /data/findatapilot.db or raises RuntimeError. In CI the probe
-    # might succeed (if /data is writable) or fail. Both are
-    # acceptable outcomes — what matters is the property is computed
-    # from the HF code path, not the local fallback.
-    try:
-        path = s.persistent_db_path
-        assert path == "/data/findatapilot.db"
-    except RuntimeError:
-        # Loud failure when /data is unwritable — that's correct
-        # behavior on a misconfigured Space.
-        pass
+    assert s.persistent_db_path == "/data/findatapilot.db"
 
 
-def test_hf_space_raises_when_data_not_writable(monkeypatch):
-    """On HF Space, an unwritable /data must crash loudly on startup
-    instead of silently falling back to a non-persistent path."""
+def test_hf_space_falls_back_when_data_not_writable(monkeypatch, tmp_path):
+    """A root-owned /data mount must not prevent the API from starting."""
     monkeypatch.setenv("SPACE_ID", "owner/space-name")
+    monkeypatch.setenv("HF_EPHEMERAL_DATA_PATH", str(tmp_path / "ephemeral"))
+    monkeypatch.setattr(
+        "app.config._is_writable_directory",
+        lambda path: path != Path("/data"),
+    )
 
     from app.config import Settings
 
     s = Settings()
 
-    def boom(*a, **kw):
-        raise OSError("simulated: /data is read-only")
-
-    monkeypatch.setattr("builtins.open", boom)
-    with pytest.raises(RuntimeError, match="persistent storage must be enabled"):
-        _ = s.persistent_db_path
+    assert s.persistent_db_path == str(tmp_path / "ephemeral" / "findatapilot.db")
 
 
 def test_turso_path_bypasses_local_resolution(monkeypatch):
