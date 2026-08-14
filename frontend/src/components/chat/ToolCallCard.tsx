@@ -9,11 +9,17 @@ interface Props {
 function asTable(data: unknown): { headers: string[]; rows: Array<Record<string, unknown>> } | null {
   if (!data || typeof data !== "object") return null;
   const obj = data as Record<string, unknown>;
+  // ToolResult is wrapped by the backend as { tool, ok, data, ... }.
+  // Accept the old direct shape too so persisted legacy messages remain
+  // renderable after this contract repair.
+  const payload = obj.data && typeof obj.data === "object"
+    ? obj.data as Record<string, unknown>
+    : obj;
   const arr =
-    (Array.isArray(obj.datas) && obj.datas) ||
-    (Array.isArray(obj.articles) && obj.articles) ||
-    (Array.isArray(obj.announcements) && obj.announcements) ||
-    (Array.isArray(obj.reports) && obj.reports) ||
+    (Array.isArray(payload.datas) && payload.datas) ||
+    (Array.isArray(payload.articles) && payload.articles) ||
+    (Array.isArray(payload.announcements) && payload.announcements) ||
+    (Array.isArray(payload.reports) && payload.reports) ||
     null;
   if (!arr || arr.length === 0 || typeof arr[0] !== "object") return null;
   const headers = Object.keys(arr[0] as object);

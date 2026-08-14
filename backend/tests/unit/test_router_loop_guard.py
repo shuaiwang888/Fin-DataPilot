@@ -24,10 +24,7 @@ def _call(name: str, args: dict[str, Any], rows: list | None = None, ok: bool = 
     """Build a tool_call record. rows=None means "non-dict data,
     treat as 0-row" (e.g. anysearch Markdown). rows=[] also 0-row.
     rows=[{...}] means non-empty data."""
-    if rows is None:
-        data = {}  # empty dict → 0 rows
-    else:
-        data = {"datas": rows}
+    data = {} if rows is None else {"datas": rows}  # empty dict → 0 rows
     return {
         "name": name,
         "args": args,
@@ -245,7 +242,7 @@ async def test_router_does_not_bail_with_one_zero() -> None:
         llm = AsyncMock()
         llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": fake_response})())
         mock_build.return_value = llm
-        out = await skill_router_node(state)  # type: ignore[arg-type]
+        await skill_router_node(state)  # type: ignore[arg-type]
     # Only 1 zero → not yet looping → LLM path
     llm.ainvoke.assert_called_once()
 

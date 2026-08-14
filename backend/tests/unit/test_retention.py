@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.storage import repository
 from app.storage.models import Message, Session
@@ -21,8 +20,9 @@ async def test_retention_caps_at_50(monkeypatch):
         local_sqlite_path = "./data/findatapilot.db"
     monkeypatch.setattr("app.storage.repository.get_settings", lambda: FakeSettings())
 
-    from app.storage.db import engine
     from sqlalchemy import delete
+
+    from app.storage.db import engine
 
     # Clean slate
     async with engine.begin() as conn:
@@ -32,7 +32,7 @@ async def test_retention_caps_at_50(monkeypatch):
         await conn.execute(delete(Session))
 
     # Create 7 sessions
-    sids = [await repository.create_session_async(title=f"t{i}", user_id="test") for i in range(7)]
+    _ = [await repository.create_session_async(title=f"t{i}", user_id="test") for i in range(7)]
 
     # Verify only 5 remain (cap)
     remaining = await repository.list_sessions_async(user_id="test", limit=100)
@@ -55,12 +55,13 @@ async def test_retention_disabled_when_cap_is_zero(monkeypatch):
     monkeypatch.setattr("app.storage.repository.get_settings", lambda: FakeSettings())
 
     from sqlalchemy import delete
+
     from app.storage.db import engine
 
     async with engine.begin() as conn:
         await conn.execute(delete(Message))
         await conn.execute(delete(Session))
 
-    sids = [await repository.create_session_async(title=f"x{i}", user_id="test2") for i in range(8)]
+    _ = [await repository.create_session_async(title=f"x{i}", user_id="test2") for i in range(8)]
     remaining = await repository.list_sessions_async(user_id="test2", limit=100)
     assert len(remaining) == 8

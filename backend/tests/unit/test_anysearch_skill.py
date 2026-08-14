@@ -9,8 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.skills.anysearch import _build_argv, ACTIONS
-
+from app.skills.anysearch import ACTIONS, _build_argv
 
 # --- argv builder ----------------------------------------------------
 

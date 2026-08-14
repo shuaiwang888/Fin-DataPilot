@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.prompts.system import render_system_prompt
-from app.agent.state import AgentState
+from app.agent.state import AgentState, ToolCallRecord
 from app.config import get_settings
 from app.llm import build_chat_model
 from app.skills.registry import REGISTRY
@@ -79,14 +79,15 @@ def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
     try:
         obj = json.loads(text)
         if isinstance(obj, dict) and "name" in obj and "args" in obj:
-            return obj
+            return cast(dict[str, Any], obj)
     except json.JSONDecodeError:
         pass
     # First {...} block
     m = re.search(r"\{[^{}]*\"name\"[^{}]*\"args\"[^{}]*\{.*?\}\s*\}", text, re.DOTALL)
     if m:
         try:
-            return json.loads(m.group(0))
+            parsed = json.loads(m.group(0))
+            return cast(dict[str, Any], parsed) if isinstance(parsed, dict) else None
         except json.JSONDecodeError:
             return None
     return None
@@ -290,7 +291,7 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
 
 
 def _substitute_placeholders(
-    args: dict[str, Any], prior_calls: list[dict[str, Any]]
+    args: dict[str, Any], prior_calls: list[ToolCallRecord]
 ) -> dict[str, Any]:
     """Replace `<step_N_xxx>` placeholders in args with values from
     the Nth prior call's result.
@@ -326,7 +327,7 @@ def _substitute_placeholders(
             return ""
 
         # Pick the row with the highest market cap (or first by default).
-        def _num(r: dict) -> float:
+        def _num(r: dict[str, Any]) -> float:
             for k in ("总市值", "A股市值", "总市值(亿元)", "market_cap"):
                 v = r.get(k)
                 if v is None:
@@ -351,7 +352,7 @@ def _substitute_placeholders(
             return json.dumps(top, ensure_ascii=False)
         return ""
 
-    def replace(match: re.Match) -> str:
+    def replace(match: re.Match[str]) -> str:
         step_idx = int(match.group(1))
         key = match.group(2)
         return lookup(step_idx, key)
@@ -365,4 +366,4 @@ def _substitute_placeholders(
             return [walk(x) for x in obj]
         return obj
 
-    return walk(args)
+    return cast(dict[str, Any], walk(args))

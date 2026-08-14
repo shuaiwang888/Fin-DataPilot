@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from langgraph.graph import END, StateGraph
 
@@ -124,6 +124,7 @@ async def run_agent_stream(
     user_query: str,
     history: list[dict[str, Any]],
     session_id: str,
+    run_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events for a single user turn."""
     from app.agent.state import (
@@ -143,6 +144,7 @@ async def run_agent_stream(
     init_state: AgentState = {
         "user_query": user_query,
         "session_id": session_id,
+        "run_id": run_id or trace_id,
         "history": history,
         "tool_calls": [],
         "skill_calls_used": 0,
@@ -160,15 +162,18 @@ async def run_agent_stream(
     }
 
     graph = get_graph()
-    final_state: AgentState = dict(init_state)
+    final_state = cast(AgentState, dict(init_state))
 
     try:
-        async for event in graph.astream(init_state, config={"recursion_limit": 50}):
+        async for event in graph.astream(
+            init_state,
+            config={"recursion_limit": 50, "configurable": {"thread_id": run_id or trace_id}},
+        ):
             # event is dict {node_name: node_output}
             for node_name, node_out in event.items():
                 if not isinstance(node_out, dict):
                     continue
-                final_state.update(node_out)
+                final_state.update(cast(AgentState, node_out))
                 # Stream per-node events
                 if node_name == "planner":
                     plan = node_out.get("plan") or []

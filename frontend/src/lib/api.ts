@@ -1,11 +1,13 @@
 import type { Message, Session, SkillItem, ToolSpec } from "./types";
+import { authHeaders } from "./auth";
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = await authHeaders();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { ...headers, "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
     const text = await res.text();
@@ -17,9 +19,11 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 /** Multipart upload — does NOT set Content-Type, so the browser fills in
  *  the boundary. Used for skill zip uploads. */
 async function uploadForm<T>(path: string, form: FormData): Promise<T> {
+  const headers = await authHeaders();
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     body: form,
+    headers,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -29,7 +33,7 @@ async function uploadForm<T>(path: string, form: FormData): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE", headers: await authHeaders() });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -74,8 +78,22 @@ export const api = {
   deleteSession: (id: string) =>
     http<{ id: string; deleted: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   deleteAllSessions: () =>
-    http<{ deleted: number; user_id: string }>("/api/sessions", { method: "DELETE" }),
+    http<{ deleted: number }>("/api/sessions", { method: "DELETE" }),
+  stopRun: (runId: string) =>
+    http<{ run_id: string; cancelled: boolean }>("/api/agent/chat/stop", {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId }),
+    }),
+  getRun: (runId: string) => http<AgentRun>(`/api/agent/runs/${runId}`),
 };
 
-export type { ToolSpec, SkillItem, Session, Message };
+export interface AgentRun {
+  id: string;
+  session_id: string;
+  status: "running" | "completed" | "cancelled" | "failed";
+  events: Array<{ event: string; data: Record<string, unknown> }>;
+  final_text?: string | null;
+  error?: string | null;
+}
 
+export type { ToolSpec, SkillItem, Session, Message };

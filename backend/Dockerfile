@@ -22,7 +22,9 @@ COPY app ./app
 COPY Skills ./Skills
 
 # Data + log dirs (HF Spaces can persist /data across rebuilds)
-RUN mkdir -p /data/outputs /data/logs
+RUN mkdir -p /data/outputs /data/logs && \
+    useradd --system --uid 10001 --create-home appuser && \
+    chown -R appuser:appuser /app /data
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -30,6 +32,8 @@ ENV PYTHONUNBUFFERED=1 \
     DATA_PILOT_HOST=0.0.0.0
 
 EXPOSE 7860
+
+USER appuser
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:7860/api/health || exit 1

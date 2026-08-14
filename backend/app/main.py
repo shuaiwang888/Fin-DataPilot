@@ -5,17 +5,19 @@ Triggered by the user adding HF_SSH_PRIVATE_KEY to GitHub Secrets.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
-from slowapi import Limiter
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app import __version__
-from app.api import agent, health, sessions, skills
+from app.api import agent, auth, health, sessions, skills
 from app.config import get_settings
 from app.db_init import init_db
 from app.skills import registry as _skills_registry  # noqa: F401 — trigger registration
@@ -53,11 +55,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS
+    # Fail loudly before serving any request with an unsigned identity in
+    # production. Accessing the property performs the environment check.
+    _ = settings.effective_auth_secret
+
+    # CORS: credentials are not used (the API uses bearer headers), so don't
+    # opt browsers into cross-origin cookie semantics.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["X-Trace-Id"],
@@ -66,21 +73,12 @@ def create_app() -> FastAPI:
     # Rate limiting (per remote IP)
     limiter = Limiter(key_func=get_remote_address)
     app.state.limiter = limiter
-
-    # Optional API key enforcement
-    if settings.api_key:
-
-        @app.middleware("http")
-        async def api_key_guard(request: Request, call_next):
-            if request.url.path in {"/api/health", "/docs", "/openapi.json", "/redoc"}:
-                return await call_next(request)
-            provided = request.headers.get("X-API-Key", "")
-            if provided != settings.api_key:
-                return ORJSONResponse({"error": "unauthorized"}, status_code=401)
-            return await call_next(request)
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_middleware(SlowAPIMiddleware)
 
     # Routers
     app.include_router(health.router, prefix="/api", tags=["health"])
+    app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(skills.router, prefix="/api", tags=["skills"])
     app.include_router(sessions.router, prefix="/api", tags=["sessions"])
     app.include_router(agent.router, prefix="/api/agent", tags=["agent"])

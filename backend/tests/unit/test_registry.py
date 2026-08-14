@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.skills.base import Handler, ToolParameter, ToolResult, ToolSpec
+from app.skills.base import ToolParameter, ToolResult, ToolSpec
 from app.skills.registry import ToolRegistry
 
 

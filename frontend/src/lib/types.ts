@@ -55,6 +55,8 @@ export interface AnswerPreamble {
 
 // SSE event types
 export type AgentEvent =
+  | { event: "run"; data: { run_id: string; session_id: string; status: string } }
+  | { event: "run_status"; data: { run_id: string; status: string; error?: string | null } }
   | { event: "ping"; data: { ts: number } }
   | { event: "session"; data: { session_id: string; title: string } }
   | { event: "think"; data: { step: string; text: string; trace_id?: string } }
@@ -77,7 +79,7 @@ export type AgentEvent =
   | { event: "token_delta"; data: { text: string } }
   | { event: "think_chunk"; data: { text: string } }
   | { event: "think_done"; data: { text: string } }
-  | { event: "heartbeat"; data: { ts: number; in_think: boolean; pending_chars: number } }
+  | { event: "heartbeat"; data: { ts: number; in_think?: boolean; pending_chars?: number; run_id?: string } }
   | {
       event: "message_final";
       data: { content: string; tool_calls: unknown[]; preamble?: AnswerPreamble };

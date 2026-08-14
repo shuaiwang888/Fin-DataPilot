@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
-from app.skills.base import ToolResult, ToolSpec
+from app.skills.base import Handler, ToolResult, ToolSpec
 from app.skills.registry import REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -196,14 +196,14 @@ def _validate_code_handler(skill_dir: Path, name: str) -> None:
     try:
         py_compile.compile(str(handler), doraise=True)
     except py_compile.PyCompileError as e:
-        raise ValueError(f"Handler has Python syntax errors: {e}")
+        raise ValueError(f"Handler has Python syntax errors: {e}") from e
 
 
-def _build_prompt_handler(name: str, body: str):
+def _build_prompt_handler(name: str, body: str) -> Handler:
     """Closure factory: returns an async handler that yields the SKILL.md
     body as its result. The default args capture `body` and `name` to
     avoid late-binding issues in the loop."""
-    async def _prompt_handler(**_) -> ToolResult:
+    async def _prompt_handler(**_: Any) -> ToolResult:
         return ToolResult(
             tool=name,
             ok=True,
@@ -233,6 +233,8 @@ def install_skill_from_zip(zip_bytes: bytes) -> dict[str, Any]:
     the SkillItem dict on success. Raises ValueError on any failure
     (with full rollback — no files left behind, no REGISTRY state mutated)."""
     settings = get_settings()
+    if not settings.enable_skill_upload:
+        raise ValueError("Skill upload is disabled by server policy")
     target_root = Path(settings.user_skills_dir)
     max_bytes = settings.max_skill_upload_bytes
 
@@ -257,6 +259,11 @@ def install_skill_from_zip(zip_bytes: bytes) -> dict[str, Any]:
 
         # Phase 2: locate SKILL.md and decide kind.
         located = _locate_skill(tmp_path)
+        # Do not execute tenant-supplied Python in the API process. A future
+        # code-skill product must run in a separately provisioned sandbox with
+        # no application credentials or persistent-volume access.
+        if located.has_py:
+            raise ValueError("Code skills are not supported; upload a prompt-only SKILL.md")
 
         # Phase 3: name conflicts
         if located.name in BUILTIN_SKILLS:
@@ -324,21 +331,21 @@ def install_skill_from_zip(zip_bytes: bytes) -> dict[str, Any]:
             )
     else:
         # Prompt skill: register a synthetic echo handler.
-        spec = _build_prompt_spec(located.name, fm_display, fm_description)
+        prompt_spec = _build_prompt_spec(located.name, fm_display, fm_description)
         handler = _build_prompt_handler(located.name, body)
-        REGISTRY.register(spec, handler)
+        REGISTRY.register(prompt_spec, handler)
         # Stash the body so to_prompt_text() can inject it into the system prompt.
         REGISTRY.set_prompt_body(located.name, body)
 
-    spec = REGISTRY.get_spec(located.name)
-    if spec is None:
+    registered_spec = REGISTRY.get_spec(located.name)
+    if registered_spec is None:
         # Belt-and-braces; should be impossible after the steps above.
         shutil.rmtree(dest, ignore_errors=True)
         raise RuntimeError("Internal: registry state inconsistent after install")
 
     return {
         "name": located.name,
-        "spec": spec.model_dump(),
+        "spec": registered_spec.model_dump(),
         "enabled": REGISTRY.is_enabled(located.name),
         "uploaded": True,
         "kind": "prompt" if handler_path is None else "code",

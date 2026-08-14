@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,7 +35,12 @@ class Settings(BaseSettings):
     data_pilot_host: str = "0.0.0.0"
     data_pilot_port: int = 7860
     data_pilot_env: Literal["development", "staging", "production"] = "development"
-    api_key: str = ""  # if set, clients must send X-API-Key header
+    # ``api_key`` is retained as a backwards-compatible alias for operator
+    # endpoints. It is never used as a browser-facing user identity.
+    api_key: str = ""
+    admin_api_key: str = ""
+    auth_secret: str = ""
+    auth_token_ttl_hours: int = 24 * 30
 
     # ===== CORS =====
     cors_allow_origins: str = "http://localhost:5173,http://localhost:3000"
@@ -53,6 +58,10 @@ class Settings(BaseSettings):
     # Hard cap on the size of an uploaded skill zip (after extraction).
     # Protects against zip bombs.
     max_skill_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+    # Code uploads execute Python and are therefore disabled by default even
+    # for administrators. Prompt-only uploads are also treated as operator
+    # content and use the same endpoint guard.
+    enable_skill_upload: bool = False
 
     # ===== AnySearch (self-hosted web/vertical search skill) =====
     # Path to the unpacked anysearch-skill/ directory. The backend
@@ -75,8 +84,11 @@ class Settings(BaseSettings):
     # Hard per-user-question cap. Every dispatch counts, including successful
     # calls, so a re-planning loop cannot make unbounded external requests.
     agent_max_skill_calls: int = 8
-    agent_max_parallel_skills: int = 3
+    # The graph is deliberately sequential while a later step can depend on
+    # evidence from an earlier one. Kept for API compatibility only.
+    agent_max_parallel_skills: int = 1
     agent_enable_reflection: bool = True
+    agent_run_timeout_seconds: int = 180
 
     # ===== Observability =====
     langfuse_public_key: str = ""
@@ -166,10 +178,7 @@ class Settings(BaseSettings):
         Space rebuilds, so we use /data/user_skills on HF Space and
         ./data/user_skills locally. Directory is created on first access.
         """
-        if self.is_hf_space:
-            d = Path("/data/user_skills")
-        else:
-            d = Path(self.local_user_skills_path)
+        d = Path("/data/user_skills") if self.is_hf_space else Path(self.local_user_skills_path)
         d.mkdir(parents=True, exist_ok=True)
         return str(d)
 
@@ -198,6 +207,23 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.data_pilot_env == "production"
+
+    @property
+    def effective_auth_secret(self) -> str:
+        """Return the signing secret; production must never use a default."""
+        if self.auth_secret:
+            return self.auth_secret
+        if self.is_production:
+            raise RuntimeError("AUTH_SECRET must be configured in production")
+        return "development-only-secret-change-before-production"
+
+    @property
+    def operator_api_key(self) -> str:
+        return self.admin_api_key or self.api_key
+
+    @property
+    def auth_token_ttl_seconds(self) -> int:
+        return max(1, self.auth_token_ttl_hours) * 60 * 60
 
     @property
     def anysearch_dir(self) -> str:

@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.agent.nodes.reflector import (
-    _infer_missing_requested_followup,
     _infer_followup_for_list_result,
+    _infer_missing_requested_followup,
     _pick_top_row,
     reflector_node,
 )
@@ -362,7 +362,11 @@ async def test_reflector_node_still_sufficient_for_simple_list_request() -> None
     # No follow-up hint expected for a simple list request.
     if out["reflection_verdict"] == "need_more":
         # If LLM is wrong, just verify the hint is structurally valid.
-        assert out.get("next_skill_hint") in (None,) + tuple([
-            "financial-query", "news-search", "announcement-search",
-            "report-search", "anysearch",
-        ])
+        assert out.get("next_skill_hint") in (
+            None,
+            "financial-query",
+            "news-search",
+            "announcement-search",
+            "report-search",
+            "anysearch",
+        )

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.storage.db import SessionLocal
-from app.storage.models import Message, Session, SkillPref, ToolRun
+from app.storage.models import AgentRun, Message, Session
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,23 @@ async def get_session_async(session_id: str) -> dict[str, Any] | None:
         }
 
 
+async def get_session_for_user_async(session_id: str, user_id: str) -> dict[str, Any] | None:
+    """Return a session only when it belongs to the authenticated user."""
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Session).where(Session.id == session_id, Session.user_id == user_id)
+        )
+        s = result.scalar_one_or_none()
+        if s is None:
+            return None
+        return {
+            "id": s.id,
+            "title": s.title,
+            "created_at": s.created_at.isoformat(),
+            "updated_at": s.updated_at.isoformat(),
+        }
+
+
 def get_session(session_id: str) -> dict[str, Any] | None:
     import asyncio
 
@@ -116,6 +133,19 @@ async def update_session_title_async(session_id: str, title: str) -> None:
             await db.commit()
 
 
+async def update_session_title_for_user_async(session_id: str, user_id: str, title: str) -> bool:
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Session).where(Session.id == session_id, Session.user_id == user_id)
+        )
+        session = result.scalar_one_or_none()
+        if session is None:
+            return False
+        session.title = title
+        await db.commit()
+        return True
+
+
 def update_session_title(session_id: str, title: str) -> None:
     import asyncio
 
@@ -128,6 +158,19 @@ async def delete_session_async(session_id: str) -> None:
         if s:
             await db.delete(s)
             await db.commit()
+
+
+async def delete_session_for_user_async(session_id: str, user_id: str) -> bool:
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Session).where(Session.id == session_id, Session.user_id == user_id)
+        )
+        session = result.scalar_one_or_none()
+        if session is None:
+            return False
+        await db.delete(session)
+        await db.commit()
+        return True
 
 
 def delete_session(session_id: str) -> None:
@@ -228,6 +271,76 @@ async def list_messages_async(session_id: str) -> list[dict[str, Any]]:
                 entry["thinking"] = json.loads(m.thinking_json)
             out.append(entry)
         return out
+
+
+# ---------- durable agent runs ----------
+
+async def create_agent_run_async(session_id: str, user_id: str, query: str) -> str:
+    run_id = _new_id()
+    async with SessionLocal() as db:
+        db.add(AgentRun(id=run_id, session_id=session_id, user_id=user_id, query=query))
+        await db.commit()
+    return run_id
+
+
+async def append_agent_run_event_async(run_id: str, event: dict[str, Any]) -> None:
+    """Persist a bounded event trail. Never let one run grow without limit."""
+    import json
+
+    async with SessionLocal() as db:
+        run = await db.get(AgentRun, run_id)
+        if run is None:
+            return
+        try:
+            events = json.loads(run.events_json)
+        except json.JSONDecodeError:
+            events = []
+        if not isinstance(events, list):
+            events = []
+        # Event payloads are intentionally compact; keep enough for an
+        # interrupted UI to rebuild its trace while bounding SQLite growth.
+        events.append(event)
+        run.events_json = json.dumps(events[-128:], ensure_ascii=False)
+        await db.commit()
+
+
+async def finish_agent_run_async(
+    run_id: str, status: str, final_text: str | None = None, error: str | None = None
+) -> None:
+    async with SessionLocal() as db:
+        run = await db.get(AgentRun, run_id)
+        if run is None:
+            return
+        run.status = status
+        run.final_text = final_text
+        run.error = error
+        await db.commit()
+
+
+async def get_agent_run_for_user_async(run_id: str, user_id: str) -> dict[str, Any] | None:
+    import json
+
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+        )
+        run = result.scalar_one_or_none()
+        if run is None:
+            return None
+        try:
+            events = json.loads(run.events_json)
+        except json.JSONDecodeError:
+            events = []
+        return {
+            "id": run.id,
+            "session_id": run.session_id,
+            "status": run.status,
+            "events": events if isinstance(events, list) else [],
+            "final_text": run.final_text,
+            "error": run.error,
+            "created_at": run.created_at.isoformat(),
+            "updated_at": run.updated_at.isoformat(),
+        }
 
 
 def list_messages(session_id: str) -> list[dict[str, Any]]:

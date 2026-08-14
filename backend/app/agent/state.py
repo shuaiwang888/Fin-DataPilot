@@ -27,6 +27,7 @@ class AgentState(TypedDict, total=False):
     # ---- inputs ----
     user_query: str
     session_id: str
+    run_id: str
     message_id: str
 
     # ---- conversation history (pre-loaded) ----

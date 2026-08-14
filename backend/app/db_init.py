@@ -5,9 +5,9 @@ import logging
 import shutil
 from pathlib import Path
 
-from app.storage.db import Base, engine
-from app.storage.models import Message, Session, SkillPref, ToolRun  # noqa: F401
 from app.config import get_settings
+from app.storage.db import Base, engine
+from app.storage.models import AgentRun, Message, Session, SkillPref, ToolRun  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

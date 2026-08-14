@@ -4,44 +4,28 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app import __version__
 from app.config import get_settings
+from app.security import AuthContext, require_admin
 from app.skills.registry import REGISTRY
 
 router = APIRouter()
 
 
 @router.get("/health")
-async def health(request: Request) -> dict:
-    settings = get_settings()
+async def health(request: Request) -> dict[str, Any]:
     return {
         "ok": True,
         "version": __version__,
-        "env": settings.data_pilot_env,
-        "llm": {
-            "provider": settings.llm_provider,
-            "model": settings.llm_model,
-            "base_url": settings.llm_base_url,
-            "api_key_configured": settings.has_real_llm_key,
-        },
-        "iwencai_key_configured": settings.has_iwencai_key,
-        "agent": {
-            "enabled": True,
-            "max_skill_calls": settings.agent_max_skill_calls,
-            "max_parallel_skills": settings.agent_max_parallel_skills,
-        },
-        "tools": {
-            "count": len(REGISTRY.list_specs()),
-            "names": [s.name for s in REGISTRY.list_specs()],
-        },
     }
 
 
 @router.get("/diag")
-async def diag() -> dict:
+async def diag(admin: AuthContext = Depends(require_admin)) -> dict[str, Any]:
     """Runtime DB diagnostics. Use this to verify the SQLite file is
     actually on the persistent volume.
 
@@ -50,7 +34,8 @@ async def diag() -> dict:
     storage is working), and the file size.
     """
     settings = get_settings()
-    info: dict = {
+    _ = admin
+    info: dict[str, Any] = {
         "is_hf_space": settings.is_hf_space,
         "space_id": os.environ.get("SPACE_ID"),
         "turso_configured": bool(settings.turso_database_url),
@@ -98,13 +83,13 @@ def _mount_info(path: str) -> str:
 
 
 @router.get("/echo")
-async def echo(text: str) -> dict:
+async def echo(text: str) -> dict[str, Any]:
     """Round-trip echo endpoint to verify CORS without invoking the LLM."""
     return {"echo": text}
 
 
 @router.get("/diag/anysearch")
-async def diag_anysearch() -> dict:
+async def diag_anysearch(admin: AuthContext = Depends(require_admin)) -> dict[str, Any]:
     """Why isn't the anysearch skill showing up in /api/skills?
 
     Walks every resolution path the config's anysearch_dir property
@@ -119,7 +104,8 @@ async def diag_anysearch() -> dict:
     import os
 
     settings = get_settings()
-    info: dict = {
+    _ = admin
+    info: dict[str, Any] = {
         "anysearch_api_key_configured": bool(
             settings.anysearch_api_key and settings.anysearch_api_key != "your-anysearch-key-here"
         ),

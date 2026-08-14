@@ -8,7 +8,7 @@ FastAPI + LangGraph agent for the Fin-DataPilot platform.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env       # fill in LLM_API_KEY and IWENCAI_API_KEY
+cp ../.env.example .env    # fill in LLM/IWENCAI keys and AUTH_SECRET for production
 ./start.sh                 # http://localhost:7860
 ```
 
@@ -43,7 +43,7 @@ all chat history.
 After enabling, restart the Space and check:
 
 ```bash
-curl https://<owner>-<space>.hf.space/api/diag
+curl -H "X-API-Key: $ADMIN_API_KEY" https://<owner>-<space>.hf.space/api/diag
 ```
 
 Expected response:
@@ -95,10 +95,11 @@ No code changes needed.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | Liveness + LLM / iWencai key config status |
-| GET | `/api/diag` | DB location, persistence mount check, file size |
-| GET | `/api/skills` | List registered Skills |
-| PATCH | `/api/skills/{name}` | Enable/disable a Skill |
+| POST | `/api/auth/anonymous` | Mint a browser bearer identity |
+| GET | `/api/health` | Public liveness only |
+| GET | `/api/diag` | Admin: DB location and persistence diagnostics |
+| GET | `/api/skills` | Authenticated user: list registered Skills |
+| PATCH | `/api/skills/{name}` | Admin: enable/disable a Skill |
 | GET | `/api/sessions` | List chat sessions (cap 50/user) |
 | POST | `/api/sessions` | Create a new session |
 | DELETE | `/api/sessions/{id}` | Delete a session |
@@ -106,6 +107,12 @@ No code changes needed.
 | GET | `/api/sessions/{id}/messages` | List messages in a session |
 | POST | `/api/agent/chat/stream` | Stream an agent run (SSE) |
 | POST | `/api/agent/chat/stop` | Abort an in-flight run |
+| GET | `/api/agent/runs/{run_id}` | Read the authenticated user's persisted run state/events |
+
+All session and agent endpoints require `Authorization: Bearer <token>`. The
+web frontend obtains this automatically from `/api/auth/anonymous`; API clients
+must obtain and retain their own token. `X-API-Key` is for operator-only routes
+and must never be embedded in the public frontend.
 
 ## Project layout
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useChatStore } from "../stores/chatStore";
-import type { ChatMessage, ThinkingStep } from "../stores/chatStore";
+import type { ChatMessage } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { streamChat } from "../lib/sse";
 import { api } from "../lib/api";
@@ -44,6 +44,7 @@ export function useChatStream() {
   // stop(), which aborts the fetch, which the parser then surfaces
   // as a thrown DOMException we catch and treat as "user stopped").
   const abortRef = useRef<AbortController | null>(null);
+  const runIdRef = useRef<string | null>(null);
 
   const send = useCallback(
     async (query: string) => {
@@ -53,6 +54,7 @@ export function useChatStream() {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      runIdRef.current = null;
 
       const url = `${API_BASE}/api/agent/chat/stream`;
       let newSessionId: string | null = null;
@@ -82,7 +84,11 @@ export function useChatStream() {
               break;
             }
           }
-          if (ev.event === "session") {
+          if (ev.event === "run") {
+            runIdRef.current = ev.data.run_id;
+          } else if (ev.event === "run_status") {
+            runIdRef.current = null;
+          } else if (ev.event === "session") {
             newSessionId = ev.data.session_id;
             // Server just minted a new session — keep the optimistic UI
             // bubbles (user + assistant) we already rendered. Only update
@@ -369,6 +375,7 @@ export function useChatStream() {
         }
       } finally {
         abortRef.current = null;
+        runIdRef.current = null;
       }
     },
     [chat, sessions]
@@ -376,6 +383,10 @@ export function useChatStream() {
 
   const stop = useCallback(() => {
     if (abortRef.current) {
+      const runId = runIdRef.current;
+      // Tell the server first so paid tool work is cancelled even if the
+      // browser immediately tears down its fetch stream.
+      if (runId) void api.stopRun(runId).catch(() => {});
       abortRef.current.abort();
       // Synchronously finalize any in-flight assistant message so the
       // UI doesn't show a "loading" state for the now-dead stream.
@@ -383,6 +394,7 @@ export function useChatStream() {
       // ran (no longer streaming), this is a no-op.
       useChatStore.getState().finalizeAssistant();
       abortRef.current = null;
+      runIdRef.current = null;
     }
   }, []);
 

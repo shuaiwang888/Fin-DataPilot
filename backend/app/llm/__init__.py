@@ -2,6 +2,8 @@
 the configured provider; defaults to MiniMax-M3 over the OpenAI-compatible API."""
 from __future__ import annotations
 
+from typing import cast
+
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
@@ -28,12 +30,11 @@ def build_chat_model(settings: Settings | None = None, **overrides: object) -> B
             **common,
         )
     if s.llm_provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic  # type: ignore[import-not-found]
+        from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(
-            api_key=s.llm_api_key,
-            model=s.llm_model,
-            **common,
+        return cast(
+            BaseChatModel,
+            ChatAnthropic(api_key=s.llm_api_key, model=s.llm_model, **common),
         )
     raise ValueError(f"Unsupported LLM provider: {s.llm_provider}")
 

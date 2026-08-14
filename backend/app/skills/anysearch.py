@@ -20,13 +20,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
-from app.skills.base import Handler, ToolParameter, ToolResult, ToolSpec
+from app.skills.base import ToolParameter, ToolResult, ToolSpec
 from app.skills.registry import REGISTRY
 from app.utils.trace import generate_trace_id
 
@@ -281,7 +280,6 @@ def _normalise_batch_queries_json(args: dict[str, Any]) -> str | None:
 
         obj_domain = _coerce_str(obj.get("domain"))
         obj_sub_domain = _coerce_str(obj.get("sub_domain"))
-        obj_sdp = obj.get("sub_domain_params")
         clean_obj_sub = obj_sub_domain.lstrip("#").strip()
         if clean_obj_sub in KNOWN_DOMAINS and "." not in clean_obj_sub:
             if not obj_domain:
@@ -680,13 +678,12 @@ SPEC = _build_spec()
 # startup won't error out on the import.
 _settings = get_settings()
 if _settings.anysearch_dir:
+    _runtime_conf = _parse_runtime_conf(Path(_settings.anysearch_dir))
     REGISTRY.register(SPEC, anysearch_handler)
     logger.info(
         "anysearch-skill registered (dir=%s, runtime=%s)",
         _settings.anysearch_dir,
-        _parse_runtime_conf(Path(_settings.anysearch_dir))[0]
-        if _parse_runtime_conf(Path(_settings.anysearch_dir))
-        else "auto-detect",
+        _runtime_conf[0] if _runtime_conf else "auto-detect",
     )
 else:
     logger.warning(

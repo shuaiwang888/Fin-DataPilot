@@ -30,13 +30,11 @@ jobs:
           # Normalise line endings (strip \r) and write the key
           printf '%s' "$HF_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Show the first and last non-empty line for debugging (no full key dump)
-          head -1 ~/.ssh/deploy_key
-          echo "---"
-          grep -v '^$' ~/.ssh/deploy_key | tail -1
-          # Configure git to use this key + accept new host
+          # Configure git to use this key. GitHub's SSH host key is pinned
+          # rather than accepted dynamically during a deployment.
+          ssh-keyscan -H hf.co >> ~/.ssh/known_hosts
           git config --global core.sshCommand \
-            "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+            "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           echo "✓ deploy key installed"
 
       - name: Deploy

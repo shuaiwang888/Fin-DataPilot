@@ -4,10 +4,11 @@
 
 ## ✨ 特性
 
-- **多轮对话 + 历史查询**：左侧会话列表、新对话、搜索、删除。
+- **隔离会话 + 历史查询**：每个浏览器获得服务端签发的匿名 Bearer 身份，会话不再共享。
 - **思考过程可见**：SSE 实时推送 `think → tool_call → tool_result → reflection → summary` 事件链。
-- **Skill 即插即用**：前端可视化启用/禁用；后端统一 `ToolSpec` / `ToolRegistry` 接口。
-- **多步反思循环**：Agent 失败可自动重试 / 切换 Skill，最多 5 轮。
+- **受控 Skill 管理**：普通用户只能使用已发布 Skill；调试、开关、上传仅限管理员。上传默认关闭，代码 Skill 不在服务进程执行。
+- **多步反思循环**：Agent 逐步执行、每次取数后反思，最多 8 次 Skill 调用。
+- **可追踪运行**：每次提问有 `run_id`，支持服务端停止和完成后查询运行事件。
 - **流式回答**：`token_delta` 事件，前端 rAF 合并渲染。
 
 ## 🏗️ 架构
@@ -17,7 +18,7 @@
         │ HTTPS + SSE
         ▼
 [ FastAPI + LangGraph :7860 ]         ← HuggingFace Spaces (Docker)
-   ├─ /api/agent/chat/stream
+    ├─ /api/auth/anonymous  /api/agent/chat/stream  /api/agent/chat/stop
    ├─ /api/sessions     /api/skills   /api/health
    ├─ ToolSpec / ToolRegistry
    └─ 4 Skills:
@@ -44,7 +45,6 @@ Fin-DataPilot/
 │   ├── Dockerfile                   # HF Space 部署
 │   └── start.sh
 └── frontend/                        # React + Vite 前端
-    └── (TBD - 见阶段 6-7)
 ```
 
 ## 🚀 快速开始
@@ -68,7 +68,7 @@ pip install -r requirements.txt
 # → http://localhost:7860/api/health
 ```
 
-### 3. 启动前端（见阶段 6-7）
+### 3. 启动前端
 
 ```bash
 cd frontend
@@ -76,6 +76,8 @@ pnpm install
 pnpm dev
 # → http://localhost:5173
 ```
+
+浏览器首次访问会自动申请匿名身份；不要自行传递 `user_id`。
 
 ## 🛰️ 部署
 
@@ -95,6 +97,18 @@ pnpm dev
 | `IWENCAI_API_KEY` | 同花顺问财 API 密钥 | 必填 |
 | `CORS_ALLOW_ORIGINS` | 允许的前端 origin（逗号分隔） | `http://localhost:5173` |
 | `DATA_PILOT_PORT` | 后端端口 | `7860` |
+| `AUTH_SECRET` | 生产环境必须设置，用于签发浏览器身份令牌 | 必填（生产） |
+| `ADMIN_API_KEY` | 保护诊断与 Skill 管理接口；绝不写入 `VITE_*` | 可选 |
+| `ENABLE_SKILL_UPLOAD` | 是否允许管理员上传**仅 Prompt** Skill | `false` |
+| `AGENT_MAX_SKILL_CALLS` | 单个问题的 Skill 调用硬上限 | `8` |
+
+## 管理与运行接口
+
+- `POST /api/auth/anonymous`：初始化浏览器身份；前端已自动调用。
+- `POST /api/agent/chat/stream`：携带 `Authorization: Bearer <token>` 发起 SSE。
+- `POST /api/agent/chat/stop`：同一身份传 `{ "run_id": "..." }` 停止任务。
+- `GET /api/agent/runs/{run_id}`：同一身份读取已持久化的执行事件与最终状态。
+- `/api/diag`、Skill 调试/开关/上传/删除：携带 `X-API-Key: $ADMIN_API_KEY`。生产环境请保持 `ENABLE_SKILL_UPLOAD=false`；代码 Skill 始终拒绝。
 
 ## 📜 License
 

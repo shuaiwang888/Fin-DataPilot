@@ -1,4 +1,5 @@
 import type { AgentEvent } from "./types";
+import { authHeaders } from "./auth";
 
 /**
  * Parse a Server-Sent Events stream and yield structured events.
@@ -24,6 +25,9 @@ export async function* parseSSE(
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
+    // SSE permits either LF or CRLF line endings. Normalizing lets the
+    // fetch-based parser work behind proxies that rewrite line endings.
+    buffer = buffer.replace(/\r\n/g, "\n");
     let idx: number;
     while ((idx = buffer.indexOf("\n\n")) !== -1) {
       const raw = buffer.slice(0, idx);
@@ -67,7 +71,7 @@ export async function* streamChat(
 ): AsyncGenerator<AgentEvent> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify(body),
     signal,
   });

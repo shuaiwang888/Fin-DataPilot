@@ -29,7 +29,6 @@ export function Sidebar() {
   // Each subscription is a separate selector call so each one is
   // compared with Object.is against the previous value — actions
   // are stable references from zustand, sessionId is a primitive.
-  const chatSessionId = useChatStore((s) => s.sessionId);
   const chatSetSession = useChatStore((s) => s.setSession);
   const chatSetMessages = useChatStore((s) => s.setMessages);
   const chatReset = useChatStore((s) => s.reset);
@@ -75,9 +74,6 @@ export function Sidebar() {
       }
     })();
     return () => ctrl.abort();
-    // We intentionally only run this on mount. Selector-returned
-    // action functions are stable references from zustand.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleNew = async () => {

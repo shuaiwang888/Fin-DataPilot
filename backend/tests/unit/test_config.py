@@ -1,5 +1,7 @@
 """Verify config wiring (no actual network calls)."""
-from app.config import get_settings
+import pytest
+
+from app.config import Settings, get_settings
 
 
 def test_settings_load() -> None:
@@ -22,3 +24,14 @@ def test_cors_origins_parsed() -> None:
 def test_database_url_is_sqlite() -> None:
     s = get_settings()
     assert "sqlite" in s.database_url
+
+
+def test_production_requires_auth_secret() -> None:
+    settings = Settings(data_pilot_env="production", auth_secret="")
+    with pytest.raises(RuntimeError, match="AUTH_SECRET"):
+        _ = settings.effective_auth_secret
+
+
+def test_admin_api_key_and_legacy_alias() -> None:
+    assert Settings(admin_api_key="operator").operator_api_key == "operator"
+    assert Settings(api_key="legacy").operator_api_key == "legacy"

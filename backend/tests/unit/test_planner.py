@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,7 +12,6 @@ from app.agent.nodes.planner import (
     planner_node,
 )
 from app.agent.nodes.skill_router import _substitute_placeholders
-
 
 # --- _try_parse_plan: JSON extraction --------------------------------
 

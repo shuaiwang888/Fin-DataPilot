@@ -8,7 +8,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agent.state import AgentState
+from app.agent.state import AgentState, ToolCallRecord
 from app.config import get_settings
 from app.llm import build_chat_model
 from app.skills.registry import REGISTRY
@@ -129,15 +129,15 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
             calls=calls,
             user_query=user_query,
         )
-        out = {
+        empty_out: dict[str, Any] = {
             "reflection_verdict": "need_more",
             "reflection": recovery_reason or "工具返回为空数据",
             **_maybe_clear_plan_for_replan("need_more", state),
         }
         if recovery_skill and recovery_args:
-            out["next_skill_hint"] = recovery_skill
-            out["next_args_hint"] = recovery_args
-        return out
+            empty_out["next_skill_hint"] = recovery_skill
+            empty_out["next_args_hint"] = recovery_args
+        return empty_out
 
     # ---- Deterministic multi-step patterns ----
     # These are common "list-of-N + ask-about-one-of-them" questions
@@ -215,7 +215,7 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         verdict = obj.get("verdict", "sufficient")
         if verdict not in ("sufficient", "need_more", "failed"):
             verdict = "sufficient"
-        out: dict[str, Any] = {
+        llm_out: dict[str, Any] = {
             "reflection_verdict": verdict,
             "reflection": obj.get("reason", ""),
             **_maybe_clear_plan_for_replan(verdict, state),
@@ -226,10 +226,10 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         hint_skill = obj.get("next_skill_hint")
         hint_args = obj.get("next_args_hint")
         if hint_skill and isinstance(hint_skill, str) and REGISTRY.get_spec(hint_skill):
-            out["next_skill_hint"] = hint_skill
+            llm_out["next_skill_hint"] = hint_skill
             if isinstance(hint_args, dict):
-                out["next_args_hint"] = hint_args
-        return out
+                llm_out["next_args_hint"] = hint_args
+        return llm_out
     except Exception as exc:  # noqa: BLE001
         logger.warning("reflector LLM call failed (%s) — defaulting to sufficient", exc)
         return {"reflection_verdict": "sufficient"}
@@ -331,9 +331,7 @@ def _pick_top_row(rows: list[dict[str, Any]], user_query: str) -> dict[str, Any]
     """
     if not rows:
         return None
-    q = (user_query or "").lower()
-
-    def _num(row: dict, *keys: str) -> float | None:
+    def _num(row: dict[str, Any], *keys: str) -> float | None:
         for k in keys:
             v = row.get(k)
             if v is None:
@@ -375,7 +373,7 @@ def _pick_top_row(rows: list[dict[str, Any]], user_query: str) -> dict[str, Any]
     return rows[0]
 
 
-def _rows_from_call(call: dict[str, Any]) -> list[dict[str, Any]]:
+def _rows_from_call(call: ToolCallRecord) -> list[dict[str, Any]]:
     result = call.get("result") or {}
     if not isinstance(result, dict):
         return []
@@ -489,10 +487,7 @@ def _row_mentions_any_term(row: dict[str, Any], terms: list[str]) -> bool:
         return False
     if not isinstance(fields, str):
         fields = str(fields)
-    for term in terms:
-        if term and term in fields:
-            return True
-    return False
+    return any(term and term in fields for term in terms)
 
 
 def _anysearch_args(user_query: str) -> dict[str, Any]:
@@ -506,7 +501,7 @@ def _anysearch_args(user_query: str) -> dict[str, Any]:
 
 def _infer_empty_result_recovery(
     *,
-    calls: list[dict[str, Any]],
+    calls: list[ToolCallRecord],
     user_query: str,
 ) -> tuple[str | None, dict[str, Any] | None, str | None]:
     """Choose a deterministic next step after an empty code-skill result.
@@ -581,7 +576,7 @@ def _infer_empty_result_recovery(
 
 
 def _find_financial_target(
-    calls: list[dict[str, Any]],
+    calls: list[ToolCallRecord],
     user_query: str,
 ) -> tuple[int, dict[str, Any]] | tuple[None, None]:
     for idx, call in enumerate(calls):
@@ -611,7 +606,7 @@ def _followup_args_for_skill(skill: str, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _followup_completed(
-    calls: list[dict[str, Any]],
+    calls: list[ToolCallRecord],
     *,
     skill: str,
     financial_idx: int,
@@ -634,7 +629,7 @@ def _followup_completed(
 
 def _infer_missing_requested_followup(
     *,
-    calls: list[dict[str, Any]],
+    calls: list[ToolCallRecord],
     user_query: str,
 ) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]:
     requested = _requested_followup_skills(user_query)

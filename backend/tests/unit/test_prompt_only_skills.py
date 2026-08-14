@@ -13,7 +13,6 @@ from app.agent.nodes.reflector import reflector_node
 from app.skills import user_uploads
 from app.skills.registry import REGISTRY
 
-
 PROMPT_SKILL_NAME = "user_glossary_skill"
 
 PROMPT_SKILL_MD_FULL = """---
@@ -52,6 +51,7 @@ def _isolate(tmp_path, monkeypatch):
     importlib.reload(cfg)
     monkeypatch.setattr(cfg, "_settings", None)
     monkeypatch.setenv("LOCAL_USER_SKILLS_PATH", str(tmp_path / "user_skills"))
+    monkeypatch.setenv("ENABLE_SKILL_UPLOAD", "true")
     s = cfg.get_settings()
     yield
     sys.modules.pop(PROMPT_SKILL_NAME, None)
@@ -113,6 +113,7 @@ def test_prompt_body_lands_in_to_prompt_text():
     assert "user_glossary_skill" in text
     # The body should be there (not just the description).
     assert "市盈率（P/E）" in text
+    assert "<untrusted_skill_reference>" in text
     # The spec's `description` should also still be there.
     assert "金融领域常见术语" in text
 

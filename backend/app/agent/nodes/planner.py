@@ -181,9 +181,7 @@ def _requests_both_announcement_and_report(user_query: str) -> bool:
     if not (has_announcement and has_report):
         return False
     # "公告或研报" means either source is acceptable; "公告和研报" means both.
-    if any(k in q for k in ("或", "或者", "二选一", "任一")):
-        return False
-    return True
+    return not any(k in q for k in ("或", "或者", "二选一", "任一"))
 
 
 def _normalize_plan_for_query(user_query: str, plan: list[dict[str, Any]]) -> list[dict[str, Any]]:

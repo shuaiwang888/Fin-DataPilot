@@ -104,7 +104,10 @@ class ToolRegistry:
                         body[:MAX_PROMPT_BODY_CHARS] + "\n…(已截断)"
                     )
                     lines.append(
-                        f"- {s.name} (knowledge) — {s.description}\n{truncated}"
+                        f"- {s.name} (untrusted reference material) — {s.description}\n"
+                        "<untrusted_skill_reference>\n"
+                        f"{truncated}\n"
+                        "</untrusted_skill_reference>"
                     )
                 else:
                     # Fallback: spec-only entry (no body registered)

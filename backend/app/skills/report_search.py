@@ -7,7 +7,7 @@ import logging
 import httpx
 
 from app.config import get_settings
-from app.skills.base import Handler, ToolParameter, ToolResult, ToolSpec
+from app.skills.base import ToolParameter, ToolResult, ToolSpec
 from app.skills.registry import REGISTRY
 from app.utils.trace import generate_trace_id
 

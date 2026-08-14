@@ -1,9 +1,6 @@
 """Persistence-path resolution: the DB must land on the right volume."""
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import pytest
 
 
@@ -11,6 +8,7 @@ import pytest
 def _isolate_settings_cache(monkeypatch):
     """Force a fresh Settings read for each test in this module."""
     import importlib
+
     import app.config as cfg
 
     importlib.reload(cfg)
@@ -25,6 +23,7 @@ def test_local_dev_uses_local_path(monkeypatch, tmp_path):
     monkeypatch.setattr("app.config.Path.is_dir", lambda self: False)
     local = tmp_path / "dev.db"
     monkeypatch.setenv("LOCAL_SQLITE_PATH", str(local))
+    monkeypatch.setenv("ADMIN_API_KEY", "test-admin-key")
 
     from app.config import Settings
 
@@ -93,22 +92,25 @@ def test_turso_path_bypasses_local_resolution(monkeypatch):
 
 def test_diag_endpoint_reports_path(monkeypatch, tmp_path):
     """Sanity check: /api/diag must return the resolved DB path."""
-    from fastapi.testclient import TestClient
     import importlib
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     import app.config as cfg
     from app.api.health import router
-    from fastapi import FastAPI
 
     monkeypatch.delenv("SPACE_ID", raising=False)
     monkeypatch.setattr("app.config.Path.is_dir", lambda self: False)
     local = tmp_path / "diag.db"
     monkeypatch.setenv("LOCAL_SQLITE_PATH", str(local))
+    monkeypatch.setenv("ADMIN_API_KEY", "test-admin-key")
 
     importlib.reload(cfg)
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
-        r = client.get("/diag")
+        r = client.get("/diag", headers={"X-API-Key": "test-admin-key"})
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["is_hf_space"] is False

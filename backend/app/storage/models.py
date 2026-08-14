@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.storage.db import Base
@@ -22,7 +22,7 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
 
-    messages: Mapped[list["Message"]] = relationship(
+    messages: Mapped[list[Message]] = relationship(
         back_populates="session", cascade="all, delete-orphan", order_by="Message.created_at"
     )
 
@@ -57,6 +57,27 @@ class ToolRun(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+
+
+class AgentRun(Base):
+    """Durable public record for one agent execution.
+
+    Events are retained in a bounded JSON array so a disconnected client can
+    inspect a completed/cancelled run without re-running paid tool calls.
+    """
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    query: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    events_json: Mapped[str] = mapped_column(Text, default="[]")
+    final_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
 
 
 class SkillPref(Base):

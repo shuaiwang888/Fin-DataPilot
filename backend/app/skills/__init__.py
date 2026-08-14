@@ -5,6 +5,15 @@ skills live in their own modules to keep this file small.
 """
 from __future__ import annotations
 
+# Concrete skills (each one calls REGISTRY.register(...) at import time)
+from app.skills import (  # noqa: F401
+    announcement_search,
+    anysearch,  # bundled web/vertical search; silently no-ops if not installed
+    financial_query,
+    news_search,
+    report_search,
+)
+
 # Order matters: register base types / registry first
 from app.skills.base import (  # noqa: F401
     Handler,
@@ -14,14 +23,5 @@ from app.skills.base import (  # noqa: F401
     timed,
 )
 from app.skills.registry import REGISTRY  # noqa: F401
-
-# Concrete skills (each one calls REGISTRY.register(...) at import time)
-from app.skills import (  # noqa: F401
-    financial_query,
-    news_search,
-    announcement_search,
-    report_search,
-    anysearch,  # bundled web/vertical search; silently no-ops if not installed
-)
 
 __all__ = ["REGISTRY", "ToolSpec", "ToolResult", "ToolParameter", "Handler", "timed"]
