@@ -14,6 +14,7 @@ import pytest
 
 from app.agent.nodes.reflector import reflector_node
 from app.agent.nodes.skill_router import skill_router_node
+from app.skills.base import ToolResult
 
 
 def _state_with_calls(calls: list[dict[str, Any]], **extra) -> dict:
@@ -219,13 +220,28 @@ async def test_two_step_loop_yields_two_tool_calls() -> None:
     state.update(out1)
     assert state["tool_calls"][-1]["name"] == "financial-query"
 
-    # Step 2: executor dispatches financial-query (real handler, real data).
-    out2 = await executor_node(state)  # type: ignore[arg-type]
+    # Step 2: executor dispatches a deterministic skill result. This test
+    # verifies graph control flow, so it must never require an iWencai key or
+    # make a real network request.
+    mocked_result = ToolResult(
+        tool="financial-query",
+        ok=True,
+        data={"datas": [_stock_row("600519", "贵州茅台", 2_000_000_000_000)]},
+    )
+    with patch(
+        "app.agent.nodes.executor.REGISTRY.dispatch",
+        new=AsyncMock(return_value=mocked_result),
+    ) as dispatch:
+        out2 = await executor_node(state)  # type: ignore[arg-type]
+    dispatch.assert_awaited_once_with(
+        "financial-query",
+        {"query": "今日涨停股票中市值最大的,按总市值排名", "limit": "5"},
+    )
     state.update(out2)
     last = state["tool_calls"][-1]
     assert last["name"] == "financial-query"
     assert last["ok"] is True
-    assert last["result"]["data"]["datas"], "financial-query should return non-empty rows in this env"
+    assert last["result"]["data"]["datas"]
 
     # Step 3: reflector decides need_more with hint for announcement-search.
     fake_reflect = json.dumps({
