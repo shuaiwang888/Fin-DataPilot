@@ -10,7 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@ant-design/icons": "^5.5.2",
+    "@ant-design/icons": "^6.3.2",
     "@ant-design/x": "^1.1.1",
     "antd": "^5.22.2",
     "react": "^18.3.1",
