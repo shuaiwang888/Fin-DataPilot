@@ -6,6 +6,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 
+pytestmark = pytest.mark.database
+
 
 @pytest.fixture
 async def client() -> AsyncClient:

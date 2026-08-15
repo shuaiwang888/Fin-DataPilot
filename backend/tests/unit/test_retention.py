@@ -6,6 +6,8 @@ import pytest
 from app.storage import repository
 from app.storage.models import Message, Session
 
+pytestmark = pytest.mark.database
+
 
 @pytest.mark.asyncio
 async def test_retention_caps_at_50(monkeypatch):
