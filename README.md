@@ -84,7 +84,7 @@ pnpm dev
 
 服务端为每个浏览器签发不可伪造、可续期的匿名 Bearer 身份，前端保存在该浏览器的 `localStorage`。所有会话和记忆都只按令牌中的服务端签名 `user_id` 读写，客户端不能自行指定用户。该方案不使用不透明的浏览器指纹：同一浏览器可连续使用；清理站点数据、无痕窗口或更换设备会获得新身份，旧记忆无法恢复。若需要跨设备同步或身份找回，应接入正式登录/OIDC。
 
-生产环境必须设置稳定的 `AUTH_SECRET`，且必须为 Hugging Face Space 启用 `/data` Persistent Storage（或配置 Turso）；否则重启会丢失历史和记忆。
+生产环境必须设置稳定的 `AUTH_SECRET`，且必须为 Hugging Face Space 挂载读写 Storage Bucket 到 `/data`（或配置 Turso）；否则重启会丢失历史和记忆。
 
 ## 🛰️ 部署
 
