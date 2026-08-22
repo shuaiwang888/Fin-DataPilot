@@ -17,8 +17,8 @@ from app.agent.graph import run_agent_stream
 from app.agent.runtime import ACTIVE_RUNS
 from app.config import get_settings
 from app.memory import build_memory_context, update_memory_after_turn
-from app.skills.configuration import refresh_published_skill_configuration
 from app.security import AuthContext, require_user
+from app.skills.configuration import refresh_published_skill_configuration
 from app.storage.repository import (
     append_agent_run_event_async,
     create_agent_run_async,

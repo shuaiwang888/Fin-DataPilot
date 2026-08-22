@@ -128,6 +128,7 @@ async def run_agent_stream(
     memory_context: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events for a single user turn."""
+    from app.agent.policy import assess_user_query
     from app.agent.state import (
         EV_REFLECTION,
         EV_THINK,
@@ -135,7 +136,6 @@ async def run_agent_stream(
         EV_TOOL_RESULT,
     )
     from app.utils.trace import generate_trace_id
-    from app.agent.policy import assess_user_query
 
     policy = assess_user_query(user_query)
     if not policy.allowed:

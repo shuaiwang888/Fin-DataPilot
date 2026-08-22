@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-
 FINANCIAL_ADVICE_TERMS = ("买入", "卖出", "推荐", "建仓", "加仓", "减仓", "止损", "目标价", "值得买", "该买吗")
 EXECUTION_TERMS = ("下单", "交易", "转账", "提现吗", "代买", "代卖")
 LONG_WINDOW_TERMS = {

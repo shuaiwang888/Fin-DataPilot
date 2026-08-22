@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.agent.state import AgentState
 from app.agent.policy import assess_tool_call
+from app.agent.state import AgentState
 from app.skills.base import ToolResult
 from app.skills.configuration import refresh_published_skill_configuration
 from app.skills.registry import REGISTRY

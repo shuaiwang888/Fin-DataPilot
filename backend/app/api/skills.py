@@ -9,7 +9,10 @@ from slowapi.util import get_remote_address
 from app.config import get_settings
 from app.security import AuthContext, require_admin, require_user
 from app.skills import user_uploads
-from app.skills.configuration import refresh_published_skill_configuration, set_published_skill_configuration
+from app.skills.configuration import (
+    refresh_published_skill_configuration,
+    set_published_skill_configuration,
+)
 from app.skills.registry import REGISTRY
 
 router = APIRouter()

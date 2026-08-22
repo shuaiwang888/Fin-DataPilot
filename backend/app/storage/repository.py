@@ -12,7 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.storage.db import SessionLocal
-from app.storage.models import AgentRun, LongTermMemory, Message, Session, SessionMemory, SkillPref, ToolRun
+from app.storage.models import (
+    AgentRun,
+    LongTermMemory,
+    Message,
+    Session,
+    SessionMemory,
+    SkillPref,
+    ToolRun,
+)
 
 logger = logging.getLogger(__name__)
 
