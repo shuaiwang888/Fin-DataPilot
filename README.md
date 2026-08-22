@@ -108,7 +108,10 @@ pnpm dev
 | `AUTH_TOKEN_TTL_HOURS` | 匿名身份有效期；前端会在到期前续期 | `8760` |
 | `ADMIN_API_KEY` | 保护诊断与 Skill 管理接口；绝不写入 `VITE_*` | 可选 |
 | `ENABLE_SKILL_UPLOAD` | 是否允许管理员上传**仅 Prompt** Skill | `false` |
-| `AGENT_MAX_SKILL_CALLS` | 单个问题的 Skill 调用硬上限 | `8` |
+| `AGENT_MAX_SKILL_CALLS` | 单个问题的 Skill 调用硬上限 | `48` |
+| `AGENT_MAX_PLANNING_CYCLES` | 证据不足时允许的重规划轮数 | `5` |
+| `AGENT_SKILL_RESOURCE_MAX_CHARS` | 每轮注入 Skill 说明/模板的字符上限 | `12000` |
+| `AGENT_RUN_TIMEOUT_SECONDS` | 单次后台执行的最长时间（秒） | `600` |
 | `MEMORY_ENABLED` | 是否启用短期/长期记忆 | `true` |
 | `MEMORY_SHORT_TERM_TTL_DAYS` | 会话摘要有效期 | `30` |
 | `MEMORY_LONG_TERM_MAX_ITEMS` | 每个匿名身份的长期记忆上限 | `100` |

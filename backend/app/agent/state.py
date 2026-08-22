@@ -11,6 +11,7 @@ class PlanStep(TypedDict):
     goal: str
     target_skill: str | None
     args: dict[str, Any]
+    success_criteria: str
 
 
 class ToolCallRecord(TypedDict):
@@ -40,7 +41,12 @@ class AgentState(TypedDict, total=False):
 
     # ---- agent-internal ----
     plan: list[PlanStep]
+    planning_cycle: int
     pending_step_index: int
+    # Project-owned SKILL.md/template context loaded for this plan.  It is
+    # ephemeral run state, never a user-provided filesystem path.
+    loaded_skill_names: list[str]
+    loaded_skill_resources: dict[str, dict[str, Any]]
     tool_calls: list[ToolCallRecord]
     reflection: str
     reflection_verdict: Literal["sufficient", "need_more", "failed"]

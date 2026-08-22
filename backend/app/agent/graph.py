@@ -2,8 +2,8 @@
 
 Pipeline:
 
-    planner → skill_router → executor → reflector ─┐
-       ↑        ↑            ↓                       │
+    planner → skill_context_loader → skill_router → executor → reflector ─┐
+       ↑                              ↑            ↓                       │
        │        │            └── reflects: enough?  │
        │        │                                   │
        │        └──── hint: skip LLM, use plan step │
@@ -30,6 +30,7 @@ from langgraph.graph import END, StateGraph
 from app.agent.nodes.executor import executor_node
 from app.agent.nodes.planner import planner_node
 from app.agent.nodes.reflector import reflector_node
+from app.agent.nodes.skill_context_loader import skill_context_loader_node
 from app.agent.nodes.skill_router import skill_router_node
 from app.agent.nodes.synthesizer import synthesize
 from app.agent.state import EV_DONE, EV_ERROR, AgentState
@@ -42,13 +43,26 @@ logger = logging.getLogger(__name__)
 def _build_graph() -> Any:
     g = StateGraph(AgentState)
     g.add_node("planner", planner_node)
+    g.add_node("skill_context_loader", skill_context_loader_node)
     g.add_node("skill_router", skill_router_node)
     g.add_node("executor", executor_node)
     g.add_node("reflector", reflector_node)
+    g.add_node(
+        "loop_limit",
+        lambda _state: {
+            "final_answer": (
+                "已达到本次问题的规划/检索安全上限，以下仅收敛已经核验到的证据；"
+                "尚未覆盖的子问题会明确标注为待补充。"
+            ),
+            "reflection_verdict": "sufficient",
+        },
+    )
     g.add_node("synthesizer", lambda s: s)  # placeholder; streaming handled outside
 
     g.set_entry_point("planner")
-    g.add_edge("planner", "skill_router")  # planner always feeds into the router
+    # Every (re-)plan first loads its project-owned SKILL.md/template context.
+    g.add_edge("planner", "skill_context_loader")
+    g.add_edge("skill_context_loader", "skill_router")
 
     # Router explicitly says whether it scheduled a fresh tool call, skipped a
     # plan step, or finished. Never infer this from `tool_calls`: doing so made
@@ -85,8 +99,12 @@ def _build_graph() -> Any:
             plan = state.get("plan") or []
             if not plan:
                 # Plan was cleared (exhausted) → re-plan with all evidence.
-                return "planner"
+                if state.get("planning_cycle", 0) < get_settings().agent_max_planning_cycles:
+                    return "planner"
+                return "loop_limit"
             return "skill_router"
+        if verdict == "need_more":
+            return "loop_limit"
         return "synthesizer"
 
     g.add_conditional_edges(
@@ -95,15 +113,16 @@ def _build_graph() -> Any:
         {
             "planner": "planner",
             "skill_router": "skill_router",
+            "loop_limit": "loop_limit",
             "synthesizer": "synthesizer",
         },
     )
 
+    g.add_edge("loop_limit", "synthesizer")
     g.add_edge("synthesizer", END)
 
-    # Default LangGraph recursion limit is 25. A full 8-call flow can use
-    # planner/router/executor/reflector nodes multiple times, so reserve room
-    # for one re-plan without allowing unbounded tool work.
+    # The stream config derives its recursion budget from the same bounded
+    # settings.  This graph itself keeps no fixed small "8-step" assumption.
     return g.compile()
 
 
@@ -165,7 +184,10 @@ async def run_agent_stream(
         "reflection_verdict": "need_more",
         "trace_id": trace_id,
         "plan": [],
+        "planning_cycle": 0,
         "pending_step_index": 0,
+        "loaded_skill_names": [],
+        "loaded_skill_resources": {},
         "next_skill_hint": None,
         "next_args_hint": None,
         "router_action": "continue",
@@ -182,7 +204,14 @@ async def run_agent_stream(
     try:
         async for event in graph.astream(
             init_state,
-            config={"recursion_limit": 50, "configurable": {"thread_id": run_id or trace_id}},
+            config={
+                "recursion_limit": max(
+                    100,
+                    get_settings().agent_max_skill_calls * 5
+                    + get_settings().agent_max_planning_cycles * 3,
+                ),
+                "configurable": {"thread_id": run_id or trace_id},
+            },
         ):
             # event is dict {node_name: node_output}
             for node_name, node_out in event.items():
@@ -201,8 +230,20 @@ async def run_agent_stream(
                         "event": EV_THINK,
                         "data": {
                             "step": "plan",
-                            "text": f"已规划 {len(plan)} 步：{' → '.join(steps)}"
+                            "text": (
+                                f"第 {node_out.get('planning_cycle', final_state.get('planning_cycle', 1))} 轮计划："
+                                f"{len(plan)} 步：{' → '.join(steps)}"
+                            )
                             + (f"\n理由：{rationale}" if rationale else ""),
+                        },
+                    }
+                if node_name == "skill_context_loader":
+                    names = node_out.get("loaded_skill_names") or []
+                    yield {
+                        "event": EV_THINK,
+                        "data": {
+                            "step": "load_skills",
+                            "text": "已加载执行所需 Skill 说明与模板：" + ("、".join(names) if names else "无"),
                         },
                     }
                 if node_name == "skill_router":

@@ -44,15 +44,16 @@ PLANNER_PROMPT = """你是 Fin-DataPilot 的规划器（Planner）。基于用�
 # 输出（严格 JSON，不带 markdown 代码块）
 {{
   "plan": [
-    {{"goal": "<这一步要达成什么目标>", "target_skill": "<skill 名或 null>", "args": {{...}}}}
+    {{"goal": "<这一步要达成什么目标>", "target_skill": "<skill 名>", "args": {{...}}, "success_criteria": "<看到什么证据才算这步完成>"}}
   ],
+  "sufficiency_criteria": ["<整题收口前必须具备的事实/证据>"],
   "rationale": "<简短解释为什么这么拆>"
 }}
 
 # 规则
 1. **简单问题**（"茅台股价"、"今天的新闻"）→ **1 步计划**
 2. **复合问题**（"涨停 + 市值最大 + 公告"、"宁德时代为什么跌 + 上下游"）→ **2-8 步计划**
-3. 每一步必须有具体的 `target_skill` + `args`（除非是"最后总结"步骤，target_skill 可以是 null）
+3. 每一步必须有具体的 `target_skill` + `args`；**不允许**输出"最后总结"或 `target_skill: null`。正文只能由 Synthesizer 在证据充分后生成。
 4. **args 的语义占位（重要）**：当后面步骤要引用前一步的输出时，**必须**用占位符：
    - `<step_0_top_stock>` — 第 0 步结果中按市值最大的那只股票的「名称 + 代码」组合
    - `<step_0_top_name>` — 只取名称
@@ -68,7 +69,7 @@ PLANNER_PROMPT = """你是 Fin-DataPilot 的规划器（Planner）。基于用�
 6. **金融问题可以多 Skill 互补**：四个金融 Skill（financial-query / news-search / announcement-search / report-search）不是互斥关系。解释原因、判断影响、分析风险、查近期近况时，通常要先取结构化数据，再补新闻 / 公告 / 研报。
    - 对"值得买 / 能不能买 / 下周是否买 / 推荐哪些"这类决策问题，不能只查一份涨幅或股票列表就结束：至少拆出候选标的、近期事件/新闻、风险或基本面证据等子任务；最终结论必须保留条件和不确定性。
 7. **anysearch 是低优先级兜底，不是禁用**：金融 Skill 优先；如果金融 Skill 返回为空、字段不全、没有覆盖用户问句，或需要公开网页/实时事实核查，可以在后续步骤使用 anysearch。
-8. **不要** plan 一个"最后总结"步骤 — synthesizer 会自动整合
+8. 计划必须先列出可核验的数据/检索步骤，不能因为常识或模型已有知识直接作答。每一步写清 `success_criteria`；同时列出全题 `sufficiency_criteria`。
 9. **不要**重复同一步的 args — 如果前一步已发起的 query 拿到 0 结果，应换一种自然问法、补其它金融 Skill，或最后用 anysearch 兜底，而不是用相同 args 再发一次
 
 # 例子
@@ -169,8 +170,16 @@ def _try_parse_plan(text: str) -> dict[str, Any] | None:
             "goal": str(step.get("goal", "")),
             "target_skill": step.get("target_skill"),
             "args": step.get("args", {}) if isinstance(step.get("args"), dict) else {},
+            "success_criteria": str(step.get("success_criteria", "取得可引用的一手或可信来源数据")),
         })
-    return {"plan": clean, "rationale": obj.get("rationale", "")}
+    criteria = obj.get("sufficiency_criteria", [])
+    if not isinstance(criteria, list):
+        criteria = []
+    return {
+        "plan": clean,
+        "sufficiency_criteria": [str(item) for item in criteria if item],
+        "rationale": obj.get("rationale", ""),
+    }
 
 
 def _requests_both_announcement_and_report(user_query: str) -> bool:
@@ -255,6 +264,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         logger.info("planner: first-time planning for query=%r", user_query[:80])
 
     settings = get_settings()
+    planning_cycle = state.get("planning_cycle", 0) + 1
     llm = build_chat_model(settings, temperature=0.0)
 
     history_text = "\n".join(f"[{m['role']}] {m['content']}" for m in history[-6:])
@@ -284,6 +294,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         f"<memory>\n{memory_context or '（无）'}\n</memory>\n\n"
         f"# 对话历史（最近 6 条）\n{history_text or '（无）'}\n\n"
         f"# 用户最新问题\n{user_query}\n\n"
+        f"# 当前规划轮次\n第 {planning_cycle} 轮（最多 {settings.agent_max_planning_cycles} 轮）\n\n"
         f"# 可用 Skill\n{skills_text}"
         f"{prior_text}\n\n"
         "请按 system prompt 中的契约输出 plan JSON。"
@@ -295,22 +306,24 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("planner LLM call failed")
-        # Fallback: empty plan → router's LLM path will drive the
-        # question reactively. Don't emit a fake 1-step plan with
-        # null skill; that short-circuits the whole run.
+        # A planner failure must not let the router answer from model memory.
+        # Use the deterministic research fallback below so every run still
+        # starts with a visible, executable data-gathering step.
         return {
-            "plan": [],
+            "plan": _fallback_research_plan(user_query),
             "pending_step_index": 0,
+            "planning_cycle": planning_cycle,
             "error": f"planner LLM call failed: {exc}",
         }
 
     content = resp.content if isinstance(resp.content, str) else str(resp.content)
     parsed = _try_parse_plan(content)
     if not parsed or not parsed.get("plan"):
-        logger.warning("planner: failed to parse plan (raw output: %r), falling back to reactive router", content[:300])
+        logger.warning("planner: failed to parse plan (raw output: %r), using research fallback", content[:300])
         return {
-            "plan": [],
+            "plan": _fallback_research_plan(user_query),
             "pending_step_index": 0,
+            "planning_cycle": planning_cycle,
         }
 
     # Validate: every step's target_skill (if not None) must exist + be enabled.
@@ -318,7 +331,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     for step in parsed["plan"]:
         skill = step.get("target_skill")
         if skill is None:
-            clean_plan.append(step)
+            logger.warning("planner: summary/null skill step is not executable, dropping it")
             continue
         if not REGISTRY.get_spec(skill):
             logger.warning("planner: unknown skill %r in plan, dropping step", skill)
@@ -328,10 +341,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             continue
         clean_plan.append(step)
 
-    # Edge case: planner gave us an empty plan after validation —
-    # fall back to letting the router LLM handle it reactively.
+    # Edge case: planner gave us an empty plan after validation — retain the
+    # plan-first contract with a deterministic research step.
     if not clean_plan:
-        logger.warning("planner: every planned step was invalid, falling back to reactive router")
+        logger.warning("planner: every planned step was invalid, using research fallback")
+        clean_plan = _fallback_research_plan(user_query)
     else:
         clean_plan = _normalize_plan_for_query(user_query, clean_plan)
 
@@ -343,7 +357,44 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     return {
         "plan": clean_plan,
         "pending_step_index": 0,
+        "planning_cycle": planning_cycle,
         # Clear any stale hint from a prior reflector turn.
         "next_skill_hint": None,
         "next_args_hint": None,
     }
+
+
+def _fallback_research_plan(user_query: str) -> list[dict[str, Any]]:
+    """Provide an executable first research step if planning LLM is unavailable.
+
+    This intentionally never returns a summary/null step: the agent must
+    retrieve evidence before it can enter final synthesis.
+    """
+    q = user_query.strip()
+    financial_markers = ("股票", "股价", "行情", "市值", "涨", "跌", "财报", "公告", "研报", "基金", "债", "指数", "港股", "A股")
+    if any(marker.lower() in q.lower() for marker in financial_markers) and (
+        REGISTRY.get_spec("financial-query") and REGISTRY.is_enabled("financial-query")
+    ):
+        return [{
+            "goal": "获取与问题直接相关的最新金融数据",
+            "target_skill": "financial-query",
+            "args": {"query": q, "limit": "10"},
+            "success_criteria": "返回带来源和时点的可引用金融数据",
+        }]
+    if REGISTRY.get_spec("anysearch") and REGISTRY.is_enabled("anysearch"):
+        return [{
+            "goal": "联网检索问题所需的可核验事实",
+            "target_skill": "anysearch",
+            "args": {"action": "search", "query": q, "max_results": 5},
+            "success_criteria": "返回可追溯的网页或公开数据来源",
+        }]
+    for spec in REGISTRY.list_specs():
+        if REGISTRY.is_enabled(spec.name):
+            args = {"query": q} if any(param.name == "query" for param in spec.parameters) else {}
+            return [{
+                "goal": "获取回答问题所需的事实",
+                "target_skill": spec.name,
+                "args": args,
+                "success_criteria": "返回可核验的工具结果",
+            }]
+    return []

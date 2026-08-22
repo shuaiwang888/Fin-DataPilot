@@ -14,6 +14,7 @@ from app.agent.state import AgentState, ToolCallRecord
 from app.config import get_settings
 from app.llm import build_chat_model
 from app.skills.registry import REGISTRY
+from app.skills.resources import render_skill_resources
 from app.utils.trace import generate_trace_id
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
 
 
 async def skill_router_node(state: AgentState) -> dict[str, Any]:
-    """Decide the next skill to call, or terminate if the answer is ready.
+    """Decide the next skill to call; final prose belongs to the synthesizer.
 
     Routing priority:
       1. **Reflector's `next_skill_hint`** — if the previous reflection
@@ -104,8 +105,9 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
          `state.plan`, consume it. This is the "pre-decomposed
          question" fast path that lets the router advance without
          calling the LLM at all.
-      3. **LLM fallback** — if neither hint nor plan, ask the LLM
-         to pick the next step.
+      3. **LLM recovery** — only when a malformed plan exhausted itself, ask
+         the LLM for another tool call.  It can never bypass research by
+         returning a user-facing answer.
     """
     settings = get_settings()
     previous_results = state.get("tool_calls", [])
@@ -240,12 +242,19 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         f"用户最新问题：{user_query}\n\n"
         f"已完成的工具调用：{len(previous_results)} 次\n"
         f"最多还可调用：{settings.agent_max_skill_calls - len(previous_results)} 次\n\n"
-        "请按 system prompt 中的契约，输出下一步的 tool_call JSON，或者直接输出最终答案。"
+        "请按 system prompt 中的契约，只输出下一步的 tool_call JSON。"
     )
 
     try:
         resp = await llm.ainvoke(
-            [SystemMessage(content=render_system_prompt()), HumanMessage(content=user_prompt)]
+            [
+                SystemMessage(
+                    content=render_system_prompt(
+                        render_skill_resources(state.get("loaded_skill_resources", {}))
+                    )
+                ),
+                HumanMessage(content=user_prompt),
+            ]
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("skill_router LLM call failed")
@@ -260,8 +269,12 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
 
     if parsed is None:
         return {
-            "final_answer": content,
-            "reflection_verdict": "sufficient",
+            "final_answer": (
+                "执行计划未能生成可验证的下一步检索动作；为了避免基于模型记忆直接作答，"
+                "本次不会把这段内容作为答案。"
+            ),
+            "reflection_verdict": "failed",
+            "error": "router returned non-tool content",
             "router_action": "finish",
         }
 

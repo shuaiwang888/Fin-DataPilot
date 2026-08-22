@@ -164,10 +164,10 @@ async def test_planner_falls_back_when_all_steps_invalid() -> None:
         llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": json.dumps(fake_plan)})())
         mock_build.return_value = llm
         out = await planner_node(state)  # type: ignore[arg-type]
-    # Fallback: empty plan → router's LLM path drives the question
-    # reactively. (Previously this returned a 1-step null-skill plan
-    # that short-circuited to "（按计划在第 1 步直接输出答案。）".)
-    assert out["plan"] == []
+    # Planner failures retain the plan-first contract by using an executable
+    # public-web research fallback, never a direct model answer.
+    assert out["plan"]
+    assert out["plan"][0]["target_skill"] == "anysearch"
     assert out["pending_step_index"] == 0
 
 
@@ -182,7 +182,8 @@ async def test_planner_falls_back_when_parse_fails() -> None:
         llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": "totally not JSON"})())
         mock_build.return_value = llm
         out = await planner_node(state)  # type: ignore[arg-type]
-    assert out["plan"] == []
+    assert out["plan"]
+    assert out["plan"][0]["target_skill"] == "anysearch"
 
 
 # --- _substitute_placeholders ----------------------------------------

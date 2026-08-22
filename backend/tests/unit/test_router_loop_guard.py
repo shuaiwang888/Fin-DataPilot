@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.agent.nodes.skill_router import skill_router_node
+from app.config import get_settings
 
 
 def _call(name: str, args: dict[str, Any], rows: list | None = None, ok: bool = True) -> dict[str, Any]:
@@ -248,7 +249,7 @@ async def test_router_does_not_bail_with_one_zero() -> None:
 
 
 @pytest.mark.asyncio
-async def test_router_stops_after_eight_skill_calls_before_asking_the_llm() -> None:
+async def test_router_stops_after_configured_skill_limit_before_asking_the_llm() -> None:
     """The hard cap applies to successful calls too, not just failures."""
     calls = [
         _call(
@@ -256,7 +257,7 @@ async def test_router_stops_after_eight_skill_calls_before_asking_the_llm() -> N
             {"query": f"query-{i}"},
             rows=[{"name": f"row-{i}"}],
         )
-        for i in range(8)
+        for i in range(get_settings().agent_max_skill_calls)
     ]
     state: dict[str, Any] = {
         "user_query": "复杂问题",
@@ -266,13 +267,13 @@ async def test_router_stops_after_eight_skill_calls_before_asking_the_llm() -> N
         "pending_step_index": 0,
         "next_skill_hint": None,
         "next_args_hint": None,
-        "skill_calls_used": 8,
+        "skill_calls_used": get_settings().agent_max_skill_calls,
     }
     with patch("app.agent.nodes.skill_router.build_chat_model") as mock_build:
         out = await skill_router_node(state)  # type: ignore[arg-type]
 
     assert out["router_action"] == "finish"
-    assert "8 次数据查询" in out["final_answer"]
+    assert f"{get_settings().agent_max_skill_calls} 次数据查询" in out["final_answer"]
     mock_build.assert_not_called()
 
 
@@ -295,3 +296,28 @@ async def test_plan_call_receives_trace_id_before_executor_runs() -> None:
 
     assert out["router_action"] == "execute"
     assert out["tool_calls"][0]["trace_id"]
+
+
+@pytest.mark.asyncio
+async def test_router_never_uses_llm_prose_as_final_answer() -> None:
+    """A malformed recovery response cannot bypass the evidence loop."""
+    state: dict[str, Any] = {
+        "user_query": "查数据",
+        "tool_calls": [],
+        "history": [],
+        "plan": [],
+        "pending_step_index": 0,
+        "next_skill_hint": None,
+        "next_args_hint": None,
+        "loaded_skill_resources": {},
+    }
+    unsafe_prose = "这是一段没有经过取数验证的直接回答。"
+    with patch("app.agent.nodes.skill_router.build_chat_model") as mock_build:
+        llm = AsyncMock()
+        llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": unsafe_prose})())
+        mock_build.return_value = llm
+        out = await skill_router_node(state)  # type: ignore[arg-type]
+
+    assert out["router_action"] == "finish"
+    assert out["reflection_verdict"] == "failed"
+    assert unsafe_prose not in out["final_answer"]

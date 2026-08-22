@@ -79,15 +79,13 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     # returns Markdown, or anysearch `search` returns Markdown when the
     # CLI's output isn't JSON). Coerce to a dict for the row-counting
     # heuristic so we don't crash on `str.get(...)`.
+    has_unstructured_text = False
     if isinstance(data, str):
-        # Non-empty text IS the answer — short-circuit and skip the LLM
-        # reflection round-trip. Empty string = "no results", same as
-        # the empty-list case below.
-        if data.strip():
-            return {
-                "reflection_verdict": "sufficient",
-                "reflection": f"skill returned {len(data):,} chars of text",
-            }
+        # A non-empty webpage/search excerpt is evidence, not automatically
+        # the answer.  Keep it in the full tool history and let the reflector
+        # compare it with every sub-goal; this prevents a single search result
+        # from prematurely ending a multi-part investigation.
+        has_unstructured_text = bool(data.strip())
         data = {}
     if not isinstance(data, dict):
         data = {}
@@ -100,6 +98,20 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
             "reflection_verdict": "sufficient",
             "reflection": "prompt-only skill: body is already in context",
         }
+    if has_unstructured_text:
+        # A text result can satisfy a simple one-step web lookup, but it must
+        # not skip the rest of an explicit research plan.
+        plan = state.get("plan") or []
+        pending_idx = state.get("pending_step_index", 0)
+        if plan and pending_idx < len(plan):
+            return {
+                "reflection_verdict": "need_more",
+                "reflection": "已取得网页文本，但执行计划仍有待核验子目标",
+            }
+        return {
+            "reflection_verdict": "sufficient",
+            "reflection": f"skill returned {len(str(result.get('data') or '')):,} chars of text",
+        }
     # Heuristic: zero results → need_more (LLM may rewrite the query).
     # If the skill returned free-form text (e.g. anysearch Markdown),
     # any non-empty text counts as "has data" — we don't try to count
@@ -109,7 +121,7 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     # [], "count": 0}), `not data` is False but rows IS empty — and
     # that's the case we need to handle too.
     rows = data.get("datas") or data.get("articles") or data.get("announcements") or data.get("reports") or []
-    if not rows:
+    if not rows and not has_unstructured_text:
         # When the plan still has more steps, do NOT emit a recovery
         # hint. The router should advance to the next plan step
         # (which may be the same skill with a different query, or a

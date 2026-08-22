@@ -108,12 +108,17 @@ class Settings(BaseSettings):
     # ===== Agent =====
     # Hard per-user-question cap. Every dispatch counts, including successful
     # calls, so a re-planning loop cannot make unbounded external requests.
-    agent_max_skill_calls: int = 8
+    agent_max_skill_calls: int = 48
+    # Replanning is deliberately separate from dispatches: each cycle can add
+    # evidence-aware sub-tasks, while the dispatch ceiling remains the final
+    # protection against unbounded external requests.
+    agent_max_planning_cycles: int = 5
+    agent_skill_resource_max_chars: int = 12_000
     # The graph is deliberately sequential while a later step can depend on
     # evidence from an earlier one. Kept for API compatibility only.
     agent_max_parallel_skills: int = 1
     agent_enable_reflection: bool = True
-    agent_run_timeout_seconds: int = 180
+    agent_run_timeout_seconds: int = 600
 
     # ===== Observability =====
     langfuse_public_key: str = ""
