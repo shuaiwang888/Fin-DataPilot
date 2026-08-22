@@ -18,27 +18,25 @@ Tests: `python -m pytest tests/ -q`
 
 This backend is deployed to a HF Space via `.github/workflows/deploy-backend-hf.yml`.
 
-### Recommended: enable Persistent Storage
+### Recommended: attach persistent storage
 
 The Space's `findatapilot.db` lives in `/data/findatapilot.db`. That path is only
-persistent across rebuilds **if the Space has Persistent Storage enabled**.
+persistent across rebuilds **if a read-write Storage Bucket/volume is mounted at
+`/data`**. The image runs as UID `1000`, matching Hugging Face's documented
+Docker Space and volume permissions.
 
 If `/data` is unavailable or owned by the host, the backend starts with an
 ephemeral writable directory instead of failing. That keeps the API available,
-but every Space rebuild / restart loses chat history. Enable persistent storage
-or configure Turso for durable history.
+but every Space rebuild / restart loses chat history. Attach persistent storage
+at `/data` or configure Turso for durable history.
 
 **How to enable:**
 
 1. Open the Space page on huggingface.co (e.g. `huggingface.co/spaces/<owner>/<space>`).
 2. Click the **Settings** tab (gear icon, top right).
-3. Scroll to the **Persistent Storage** section.
-4. Toggle **Enable Persistent Storage** → ON.
-5. Optionally change the storage tier (paid Spaces get more space).
-6. Click **Save**.
-
-> On free-tier CPU Spaces, Persistent Storage is available with 50 GB.
-> On paid hardware, up to 200 GB.
+3. Create or select a **Storage Bucket**.
+4. Attach it to the Space as a **read-write** volume mounted at `/data`.
+5. Restart the Space.
 
 ### Verify it's working
 
@@ -68,8 +66,8 @@ Expected response:
 `/data` is its own filesystem (a persistent volume) instead of a
 directory on the root FS (which would be wiped on rebuild).
 
-If you see `data_dir_is_separate_mount: false`, Persistent Storage is
-**not** enabled — go back to step 1.
+If you see `data_dir_is_separate_mount: false`, no persistent volume is mounted
+at `/data` — go back to step 1.
 
 ### Startup logs
 
