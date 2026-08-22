@@ -197,7 +197,7 @@ def _validate_args(spec: ToolSpec, args: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"parameter '{name}' must be an integer")
         elif p.type == "number":
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if isinstance(value, bool) or not isinstance(value, int | float):
                 raise ValueError(f"parameter '{name}' must be a number")
         elif p.type == "boolean" and not isinstance(value, bool):
             raise ValueError(f"parameter '{name}' must be a boolean")
