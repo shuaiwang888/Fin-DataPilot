@@ -7,7 +7,15 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.storage.db import Base, engine
-from app.storage.models import AgentRun, Message, Session, SkillPref, ToolRun  # noqa: F401
+from app.storage.models import (  # noqa: F401
+    AgentRun,
+    LongTermMemory,
+    Message,
+    Session,
+    SessionMemory,
+    SkillPref,
+    ToolRun,
+)
 
 logger = logging.getLogger(__name__)
 

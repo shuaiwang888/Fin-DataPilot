@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.storage.db import SessionLocal
-from app.storage.models import AgentRun, Message, Session
+from app.storage.models import AgentRun, LongTermMemory, Message, Session, SessionMemory
 
 logger = logging.getLogger(__name__)
 
@@ -347,3 +348,159 @@ def list_messages(session_id: str) -> list[dict[str, Any]]:
     import asyncio
 
     return asyncio.run(list_messages_async(session_id))
+
+
+# ---------- memory ----------
+
+async def get_session_memory_async(session_id: str, user_id: str) -> dict[str, Any] | None:
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(SessionMemory).where(
+                SessionMemory.session_id == session_id,
+                SessionMemory.user_id == user_id,
+                SessionMemory.expires_at > datetime.now(timezone.utc),
+            )
+        )
+        memory = result.scalar_one_or_none()
+        if memory is None:
+            return None
+        return {
+            "session_id": memory.session_id,
+            "summary": memory.summary,
+            "message_count": memory.message_count,
+            "expires_at": memory.expires_at.isoformat(),
+            "updated_at": memory.updated_at.isoformat(),
+        }
+
+
+async def upsert_session_memory_async(
+    session_id: str, user_id: str, summary: str, message_count: int
+) -> None:
+    settings = get_settings()
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        days=max(1, settings.memory_short_term_ttl_days)
+    )
+    async with SessionLocal() as db:
+        memory = await db.get(SessionMemory, session_id)
+        if memory is None:
+            db.add(
+                SessionMemory(
+                    session_id=session_id,
+                    user_id=user_id,
+                    summary=summary[: settings.memory_short_summary_max_chars],
+                    message_count=message_count,
+                    expires_at=expires_at,
+                )
+            )
+        elif memory.user_id == user_id:
+            memory.summary = summary[: settings.memory_short_summary_max_chars]
+            memory.message_count = message_count
+            memory.expires_at = expires_at
+        await db.commit()
+
+
+async def list_long_term_memories_async(
+    user_id: str, limit: int | None = None
+) -> list[dict[str, Any]]:
+    cap = min(
+        max(limit or get_settings().memory_long_term_max_items, 1),
+        get_settings().memory_long_term_max_items,
+    )
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(LongTermMemory)
+            .where(LongTermMemory.user_id == user_id)
+            .order_by(LongTermMemory.importance.desc(), LongTermMemory.updated_at.desc())
+            .limit(cap)
+        )
+        return [
+            {
+                "id": item.id,
+                "category": item.category,
+                "content": item.content,
+                "importance": item.importance,
+                "created_at": item.created_at.isoformat(),
+                "updated_at": item.updated_at.isoformat(),
+            }
+            for item in result.scalars().all()
+        ]
+
+
+async def upsert_long_term_memory_async(
+    user_id: str,
+    category: str,
+    content: str,
+    normalized_key: str,
+    importance: int,
+    source_session_id: str | None,
+) -> str:
+    """Insert or refresh a memory, then enforce the per-user cap."""
+    key = normalized_key.strip().lower()[:255]
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(LongTermMemory).where(
+                LongTermMemory.user_id == user_id,
+                LongTermMemory.normalized_key == key,
+            )
+        )
+        item = result.scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        if item is None:
+            item = LongTermMemory(
+                id=_new_id(),
+                user_id=user_id,
+                category=category[:32],
+                content=content,
+                normalized_key=key,
+                importance=min(max(importance, 1), 5),
+                source_session_id=source_session_id,
+                last_accessed_at=now,
+            )
+            db.add(item)
+        else:
+            item.category = category[:32]
+            item.content = content
+            item.importance = min(max(importance, 1), 5)
+            item.source_session_id = source_session_id or item.source_session_id
+            item.last_accessed_at = now
+            item.updated_at = now
+        await db.flush()
+
+        cap = get_settings().memory_long_term_max_items
+        if cap > 0:
+            rows = await db.execute(
+                select(LongTermMemory.id)
+                .where(LongTermMemory.user_id == user_id)
+                .order_by(LongTermMemory.importance.desc(), LongTermMemory.updated_at.desc())
+            )
+            excess = list(rows.scalars().all())[cap:]
+            if excess:
+                await db.execute(delete(LongTermMemory).where(LongTermMemory.id.in_(excess)))
+        await db.commit()
+        return item.id
+
+
+async def delete_long_term_memory_for_user_async(memory_id: str, user_id: str) -> bool:
+    async with SessionLocal() as db:
+        result = await db.execute(
+            delete(LongTermMemory).where(
+                LongTermMemory.id == memory_id, LongTermMemory.user_id == user_id
+            )
+        )
+        await db.commit()
+        return bool(result.rowcount)
+
+
+async def clear_memories_for_user_async(user_id: str) -> dict[str, int]:
+    async with SessionLocal() as db:
+        long_result = await db.execute(
+            delete(LongTermMemory).where(LongTermMemory.user_id == user_id)
+        )
+        short_result = await db.execute(
+            delete(SessionMemory).where(SessionMemory.user_id == user_id)
+        )
+        await db.commit()
+        return {
+            "long_term": long_result.rowcount or 0,
+            "short_term": short_result.rowcount or 0,
+        }

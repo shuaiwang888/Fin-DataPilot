@@ -79,6 +79,13 @@ export const api = {
     http<{ id: string; deleted: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   deleteAllSessions: () =>
     http<{ deleted: number }>("/api/sessions", { method: "DELETE" }),
+  listMemories: () => http<MemoryListResponse>("/api/memories"),
+  deleteMemory: (id: string) =>
+    http<{ id: string; deleted: boolean }>(`/api/memories/${id}`, { method: "DELETE" }),
+  clearMemories: () =>
+    http<{ deleted: { long_term: number; short_term: number } }>("/api/memories", {
+      method: "DELETE",
+    }),
   stopRun: (runId: string) =>
     http<{ run_id: string; cancelled: boolean }>("/api/agent/chat/stop", {
       method: "POST",
@@ -94,6 +101,21 @@ export interface AgentRun {
   events: Array<{ event: string; data: Record<string, unknown> }>;
   final_text?: string | null;
   error?: string | null;
+}
+
+export interface MemoryItem {
+  id: string;
+  category: string;
+  content: string;
+  importance: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryListResponse {
+  enabled: boolean;
+  identity_scope: "this_browser";
+  memories: MemoryItem[];
 }
 
 export type { ToolSpec, SkillItem, Session, Message };

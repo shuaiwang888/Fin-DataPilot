@@ -17,7 +17,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app import __version__
-from app.api import agent, auth, health, sessions, skills
+from app.api import agent, auth, health, memories, sessions, skills
 from app.config import get_settings
 from app.db_init import init_db
 from app.skills import registry as _skills_registry  # noqa: F401 — trigger registration
@@ -81,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(skills.router, prefix="/api", tags=["skills"])
     app.include_router(sessions.router, prefix="/api", tags=["sessions"])
+    app.include_router(memories.router, prefix="/api", tags=["memories"])
     app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 
     return app

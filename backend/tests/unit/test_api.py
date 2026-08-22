@@ -61,6 +61,35 @@ async def test_client_cannot_choose_user_id(client: AsyncClient) -> None:
     assert "user_id" not in session.json()["session"]
 
 
+async def test_anonymous_identity_can_renew_without_changing_user(client: AsyncClient) -> None:
+    first = await client.post("/api/auth/anonymous")
+    first_body = first.json()
+    renewed = await client.post(
+        "/api/auth/anonymous",
+        headers={"Authorization": f"Bearer {first_body['access_token']}"},
+    )
+    assert renewed.status_code == 200
+    assert renewed.json()["user_id"] == first_body["user_id"]
+
+
+async def test_memory_api_is_isolated(client: AsyncClient) -> None:
+    from app.storage.repository import upsert_long_term_memory_async
+
+    first = await client.post("/api/auth/anonymous")
+    first_body = first.json()
+    first_headers = {"Authorization": f"Bearer {first_body['access_token']}"}
+    second_headers = await _identity(client)
+    session = await client.post("/api/sessions", json={"title": "memory"}, headers=first_headers)
+    memory_id = await upsert_long_term_memory_async(
+        first_body["user_id"], "preference", "偏好低风险", "risk:low", 5, session.json()["id"]
+    )
+
+    own = await client.get("/api/memories", headers=first_headers)
+    assert [item["id"] for item in own.json()["memories"]] == [memory_id]
+    assert (await client.get("/api/memories", headers=second_headers)).json()["memories"] == []
+    assert (await client.delete(f"/api/memories/{memory_id}", headers=second_headers)).status_code == 404
+
+
 async def test_skill_mutation_is_operator_only(client: AsyncClient) -> None:
     headers = await _identity(client)
     response = await client.patch(

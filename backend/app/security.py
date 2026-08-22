@@ -30,10 +30,12 @@ def _secret() -> bytes:
     return get_settings().effective_auth_secret.encode("utf-8")
 
 
-def issue_anonymous_token() -> tuple[str, AuthContext]:
+def issue_anonymous_token(user_id: str | None = None) -> tuple[str, AuthContext]:
     """Create an opaque, signed bearer token for one browser profile."""
     settings = get_settings()
-    user_id = f"anon_{secrets.token_urlsafe(18)}"
+    user_id = user_id or f"anon_{secrets.token_urlsafe(18)}"
+    if not user_id.startswith("anon_"):
+        raise ValueError("Anonymous user id required")
     expires_at = int(time.time()) + settings.auth_token_ttl_seconds
     payload = f"v1.{user_id}.{expires_at}"
     signature = hmac.new(_secret(), payload.encode("utf-8"), hashlib.sha256).digest()
@@ -64,6 +66,16 @@ async def require_user(authorization: str | None = Header(default=None)) -> Auth
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bearer token required")
     return _decode_token(authorization.removeprefix("Bearer ").strip())
+
+
+def decode_optional_bearer(authorization: str | None) -> AuthContext | None:
+    """Decode a valid bearer when present; invalid/expired values renew as new."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        return _decode_token(authorization.removeprefix("Bearer ").strip())
+    except HTTPException:
+        return None
 
 
 async def require_admin(

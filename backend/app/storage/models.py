@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.storage.db import Base
@@ -87,4 +87,42 @@ class SkillPref(Base):
     skill_name: Mapped[str] = mapped_column(String(64), primary_key=True)
     enabled: Mapped[int] = mapped_column(Integer, default=1)
     config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
+
+
+class SessionMemory(Base):
+    """Rolling short-term summary for one conversation."""
+
+    __tablename__ = "session_memories"
+
+    session_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(index=True)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
+
+
+class LongTermMemory(Base):
+    """A stable user fact or preference, isolated by anonymous identity."""
+
+    __tablename__ = "long_term_memories"
+    __table_args__ = (
+        UniqueConstraint("user_id", "normalized_key", name="uq_memory_user_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    category: Mapped[str] = mapped_column(String(32), default="context", index=True)
+    content: Mapped[str] = mapped_column(Text)
+    normalized_key: Mapped[str] = mapped_column(String(255))
+    importance: Mapped[int] = mapped_column(Integer, default=3)
+    source_session_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    last_accessed_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
