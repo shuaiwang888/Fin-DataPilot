@@ -53,9 +53,119 @@ def _sse_keepalive() -> str:
     return ": keep-alive\n\n"
 
 
-async def _persist_and_encode(run_id: str, event: dict[str, Any]) -> str:
-    await append_agent_run_event_async(run_id, event)
-    return _sse(event["event"], event.get("data", {}), event.get("id"))
+async def _execute_run_background(
+    *,
+    run_id: str,
+    session_id: str,
+    user_id: str,
+    query: str,
+    history: list[dict[str, Any]],
+    memory_context: str,
+    event_queue: asyncio.Queue[dict[str, Any] | None],
+) -> None:
+    """Own an Agent run independently from the transient SSE connection.
+
+    Hugging Face's proxy can close a long request even while heartbeat events
+    are flowing. Keeping execution here lets the browser recover the durable
+    result through ``GET /runs/{run_id}`` without repeating paid tool calls.
+    """
+    final_text = ""
+    tool_calls: list[dict[str, Any]] = []
+    terminal_status = "completed"
+    terminal_error: str | None = None
+
+    async def publish(event: dict[str, Any]) -> None:
+        try:
+            await append_agent_run_event_async(run_id, event)
+        except Exception:  # noqa: BLE001
+            # A trace-write failure must not throw away an otherwise viable
+            # answer. The terminal run row is persisted separately below.
+            logger.exception("event persistence failed for run %s", run_id)
+        await event_queue.put(event)
+
+    async def collect() -> None:
+        nonlocal final_text
+        async for item in run_agent_stream(
+            user_query=query,
+            history=history,
+            session_id=session_id,
+            run_id=run_id,
+            memory_context=memory_context,
+        ):
+            event_name = str(item.get("event", ""))
+            event_data = item.get("data", {})
+            event = {"event": event_name, "data": event_data}
+            await publish(event)
+            if event_name == "tool_result":
+                tool_calls.append(event_data)
+            elif event_name == "message_final":
+                final_text = str(event_data.get("content", ""))
+
+    try:
+        await asyncio.wait_for(collect(), timeout=get_settings().agent_run_timeout_seconds)
+    except asyncio.TimeoutError:
+        terminal_status = "failed"
+        terminal_error = "Agent run exceeded the server time limit"
+        await publish({"event": "error", "data": {"message": terminal_error}})
+    except asyncio.CancelledError:
+        terminal_status = "cancelled"
+        terminal_error = "run cancelled"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("run %s failed", run_id)
+        terminal_status = "failed"
+        terminal_error = str(exc)
+        await publish({"event": "error", "data": {"message": terminal_error}})
+
+    try:
+        if final_text and terminal_status == "completed":
+            try:
+                await save_message_async(
+                    session_id=session_id,
+                    role="assistant",
+                    content=final_text,
+                    tool_calls=tool_calls or None,
+                    thinking={"trace": tool_calls},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("assistant message persistence failed for run %s", run_id)
+                terminal_status = "failed"
+                terminal_error = f"answer persistence failed: {exc}"
+
+        try:
+            await finish_agent_run_async(run_id, terminal_status, final_text or None, terminal_error)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("terminal status persistence failed for run %s", run_id)
+            terminal_status = "failed"
+            terminal_error = f"run persistence failed: {exc}"
+
+        await event_queue.put(
+            {
+                "event": "run_status",
+                "data": {"run_id": run_id, "status": terminal_status, "error": terminal_error},
+            }
+        )
+        await event_queue.put(None)
+
+        # Durable status is available before best-effort memory extraction,
+        # so frontend recovery does not wait for this post-processing step.
+        if final_text and terminal_status == "completed":
+            try:
+                await asyncio.wait_for(
+                    update_memory_after_turn(
+                        user_id=user_id,
+                        session_id=session_id,
+                        query=query,
+                        answer=final_text,
+                        message_count=len(history) + 2,
+                    ),
+                    timeout=20,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("memory update failed for run %s", run_id)
+    finally:
+        # Always release the strong task reference, including if terminal
+        # persistence itself encounters an unexpected failure.
+        await ACTIVE_RUNS.unregister(run_id)
 
 
 @router.post("/chat/stream", response_class=StreamingResponse)
@@ -89,121 +199,56 @@ async def chat_stream(
         yield _sse("run", {"run_id": run_id, "session_id": session_id, "status": "running"}, run_id)
         yield _sse("ping", {"ts": time.time()})
 
-        stop = asyncio.Event()
-        ticker_q: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
-        agent_q: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue(maxsize=64)
+        agent_q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        runner_task: asyncio.Task[Any] = asyncio.create_task(
+            _execute_run_background(
+                run_id=run_id,
+                session_id=session_id,
+                user_id=auth.user_id,
+                query=body.query,
+                history=history,
+                memory_context=memory_context,
+                event_queue=agent_q,
+            )
+        )
+        await ACTIVE_RUNS.register(run_id, runner_task)
 
-        async def ticker() -> None:
-            try:
-                while not stop.is_set():
-                    await asyncio.sleep(SSE_KEEPALIVE_INTERVAL)
-                    if not stop.is_set() and ticker_q.empty():
-                        ticker_q.put_nowait(None)
-            except asyncio.CancelledError:
-                return
-
-        async def pump() -> None:
-            async def collect() -> None:
-                async for event in run_agent_stream(
-                    user_query=body.query,
-                    history=history,
-                    session_id=session_id,
-                    run_id=run_id,
-                    memory_context=memory_context,
-                ):
-                    await agent_q.put(event)
-            try:
-                await asyncio.wait_for(collect(), timeout=get_settings().agent_run_timeout_seconds)
-            except asyncio.TimeoutError:
-                await agent_q.put(RuntimeError("Agent run exceeded the server time limit"))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                await agent_q.put(exc)
-            finally:
-                await agent_q.put(None)
-
-        ticker_task: asyncio.Task[Any] = asyncio.create_task(ticker())
-        pump_task: asyncio.Task[Any] = asyncio.create_task(pump())
-        await ACTIVE_RUNS.register(run_id, pump_task)
-        final_text = ""
-        tool_calls: list[dict[str, Any]] = []
-        terminal_status = "completed"
-        terminal_error: str | None = None
+        # This loop is only a subscriber. Losing the HTTP connection must not
+        # cancel ``runner_task``; the frontend will recover its durable result.
+        waiters: set[asyncio.Task[Any]] = set()
         try:
             while True:
                 if await request.is_disconnected():
-                    terminal_status = "cancelled"
-                    terminal_error = "client disconnected"
-                    break
+                    logger.info("SSE detached from run %s; background execution continues", run_id)
+                    return
                 queue_wait = asyncio.create_task(agent_q.get())
-                tick_wait = asyncio.create_task(ticker_q.get())
+                keepalive_wait = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
                 disconnect_wait = asyncio.create_task(asyncio.sleep(1))
+                waiters = {queue_wait, keepalive_wait, disconnect_wait}
                 done, pending = await asyncio.wait(
-                    {queue_wait, tick_wait, disconnect_wait}, return_when=asyncio.FIRST_COMPLETED
+                    waiters,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 for task in pending:
                     task.cancel()
                 for task in pending:
                     with suppress(asyncio.CancelledError):
                         await task
+                waiters = set()
                 if queue_wait in done:
                     item = queue_wait.result()
                     if item is None:
                         break
-                    if isinstance(item, BaseException):
-                        raise item
-                    event_name = str(item.get("event", ""))
-                    event_data = item.get("data", {})
-                    event = {"event": event_name, "data": event_data}
-                    yield await _persist_and_encode(run_id, event)
-                    if event_name == "tool_result":
-                        tool_calls.append(event_data)
-                    elif event_name == "message_final":
-                        final_text = str(event_data.get("content", ""))
-                elif tick_wait in done:
+                    yield _sse(str(item.get("event", "")), item.get("data", {}), item.get("id"))
+                elif keepalive_wait in done:
                     yield _sse_keepalive()
                     yield _sse("heartbeat", {"ts": time.time(), "run_id": run_id})
-        except asyncio.CancelledError:
-            terminal_status = "cancelled"
-            terminal_error = "run cancelled"
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("run %s failed", run_id)
-            terminal_status = "failed"
-            terminal_error = str(exc)
-            yield await _persist_and_encode(run_id, {"event": "error", "data": {"message": str(exc)}})
         finally:
-            stop.set()
-            for task in (ticker_task, pump_task):
+            for task in waiters:
                 task.cancel()
-            for task in (ticker_task, pump_task):
-                with suppress(asyncio.CancelledError, Exception):
+            for task in waiters:
+                with suppress(asyncio.CancelledError):
                     await task
-            await ACTIVE_RUNS.unregister(run_id)
-            await finish_agent_run_async(run_id, terminal_status, final_text or None, terminal_error)
-
-        if final_text and terminal_status == "completed":
-            await save_message_async(
-                session_id=session_id,
-                role="assistant",
-                content=final_text,
-                tool_calls=tool_calls or None,
-                thinking={"trace": tool_calls},
-            )
-            try:
-                await asyncio.wait_for(
-                    update_memory_after_turn(
-                        user_id=auth.user_id,
-                        session_id=session_id,
-                        query=body.query,
-                        answer=final_text,
-                        message_count=len(history) + 2,
-                    ),
-                    timeout=20,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("memory update failed for run %s", run_id)
-        yield _sse("run_status", {"run_id": run_id, "status": terminal_status, "error": terminal_error})
 
     return StreamingResponse(
         event_gen(),
@@ -220,6 +265,8 @@ async def stop_chat_run(
     run = await get_agent_run_for_user_async(body.run_id, auth.user_id)
     if run is None:
         raise HTTPException(404, "Run not found")
+    if run["status"] != "running":
+        return {"run_id": body.run_id, "cancelled": False}
     cancelled = await ACTIVE_RUNS.cancel(body.run_id)
     if cancelled:
         await finish_agent_run_async(body.run_id, "cancelled", error="cancelled by user")

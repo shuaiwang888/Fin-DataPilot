@@ -91,7 +91,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ run_id: runId }),
     }),
-  getRun: (runId: string) => http<AgentRun>(`/api/agent/runs/${runId}`),
+  getRun: (runId: string, signal?: AbortSignal) =>
+    http<AgentRun>(`/api/agent/runs/${runId}`, { signal }),
 };
 
 export interface AgentRun {
