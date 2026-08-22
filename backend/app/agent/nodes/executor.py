@@ -34,7 +34,26 @@ async def executor_node(state: AgentState) -> dict[str, Any]:
     pending["duration_ms"] = result.duration_ms
     pending["error"] = result.error
 
+    # Single-run working memory is deliberately ephemeral. It gives later
+    # nodes a compact ledger without writing raw tool evidence into the
+    # user's long-term profile.
+    working_memory = dict(state.get("working_memory", {}))
+    evidence = list(working_memory.get("tool_evidence", []))
+    evidence.append(
+        {
+            "name": name,
+            "args": args,
+            "ok": result.ok,
+            "trace_id": trace_id,
+        }
+    )
+    working_memory["tool_evidence"] = evidence
+    completed = list(working_memory.get("completed_steps", []))
+    completed.append(name)
+    working_memory["completed_steps"] = completed
+
     return {
         "tool_calls": calls,
         "skill_calls_used": state.get("skill_calls_used", 0) + 1,
+        "working_memory": working_memory,
     }

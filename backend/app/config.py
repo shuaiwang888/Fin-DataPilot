@@ -53,7 +53,9 @@ class Settings(BaseSettings):
     api_key: str = ""
     admin_api_key: str = ""
     auth_secret: str = ""
-    auth_token_ttl_hours: int = 24 * 30
+    # Anonymous browser identities are renewable before expiry. A long default
+    # keeps cross-session memory useful without pretending to be account sync.
+    auth_token_ttl_hours: int = 24 * 365
 
     # ===== CORS =====
     cors_allow_origins: str = "http://localhost:5173,http://localhost:3000"
@@ -95,6 +97,13 @@ class Settings(BaseSettings):
     # and the user already has this many, the OLDEST session (by
     # created_at) is deleted to make room. Set to 0 to disable.
     max_sessions_per_user: int = 50
+
+    # ===== Memory =====
+    memory_enabled: bool = True
+    memory_short_term_ttl_days: int = 30
+    memory_short_summary_max_chars: int = 4_000
+    memory_long_term_max_items: int = 100
+    memory_recall_max_items: int = 12
 
     # ===== Agent =====
     # Hard per-user-question cap. Every dispatch counts, including successful

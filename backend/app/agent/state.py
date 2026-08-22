@@ -32,6 +32,11 @@ class AgentState(TypedDict, total=False):
 
     # ---- conversation history (pre-loaded) ----
     history: list[dict[str, Any]]
+    # Read-only recalled context. It is populated before the graph starts and
+    # treated as untrusted user data by every LLM prompt.
+    memory_context: str
+    # Ephemeral single-run scratchpad; never persisted as long-term memory.
+    working_memory: dict[str, Any]
 
     # ---- agent-internal ----
     plan: list[PlanStep]

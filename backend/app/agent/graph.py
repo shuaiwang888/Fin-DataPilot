@@ -125,6 +125,7 @@ async def run_agent_stream(
     history: list[dict[str, Any]],
     session_id: str,
     run_id: str | None = None,
+    memory_context: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events for a single user turn."""
     from app.agent.state import (
@@ -146,6 +147,12 @@ async def run_agent_stream(
         "session_id": session_id,
         "run_id": run_id or trace_id,
         "history": history,
+        "memory_context": memory_context,
+        "working_memory": {
+            "query": user_query,
+            "completed_steps": [],
+            "tool_evidence": [],
+        },
         "tool_calls": [],
         "skill_calls_used": 0,
         "reflection_verdict": "need_more",

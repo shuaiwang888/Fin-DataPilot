@@ -16,6 +16,7 @@ from slowapi.util import get_remote_address
 from app.agent.graph import run_agent_stream
 from app.agent.runtime import ACTIVE_RUNS
 from app.config import get_settings
+from app.memory import build_memory_context, update_memory_after_turn
 from app.security import AuthContext, require_user
 from app.storage.repository import (
     append_agent_run_event_async,
@@ -80,7 +81,10 @@ async def chat_stream(
 
         await save_message_async(session_id=session_id, role="user", content=body.query)
         history = await list_messages_async(session_id)
-        history = [m for m in history if not (m["role"] == "user" and m["content"] == body.query)]
+        # The message just saved is always last. Slice only that row; filtering
+        # by content would also erase legitimate repeated questions.
+        history = history[:-1]
+        memory_context = await build_memory_context(auth.user_id, session_id, body.query)
         run_id = await create_agent_run_async(session_id, auth.user_id, body.query)
         yield _sse("run", {"run_id": run_id, "session_id": session_id, "status": "running"}, run_id)
         yield _sse("ping", {"ts": time.time()})
@@ -101,7 +105,11 @@ async def chat_stream(
         async def pump() -> None:
             async def collect() -> None:
                 async for event in run_agent_stream(
-                    user_query=body.query, history=history, session_id=session_id, run_id=run_id
+                    user_query=body.query,
+                    history=history,
+                    session_id=session_id,
+                    run_id=run_id,
+                    memory_context=memory_context,
                 ):
                     await agent_q.put(event)
             try:
@@ -182,6 +190,19 @@ async def chat_stream(
                 tool_calls=tool_calls or None,
                 thinking={"trace": tool_calls},
             )
+            try:
+                await asyncio.wait_for(
+                    update_memory_after_turn(
+                        user_id=auth.user_id,
+                        session_id=session_id,
+                        query=body.query,
+                        answer=final_text,
+                        message_count=len(history) + 2,
+                    ),
+                    timeout=20,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("memory update failed for run %s", run_id)
         yield _sse("run_status", {"run_id": run_id, "status": terminal_status, "error": terminal_error})
 
     return StreamingResponse(
