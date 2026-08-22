@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from app.skills.base import Handler, ToolResult, ToolSpec
@@ -124,11 +125,123 @@ class ToolRegistry:
         if not self._enabled.get(name, False):
             return ToolResult(tool=name, ok=False, error=f"skill '{name}' is disabled")
         handler = self._handlers[name]
-        # Validate args against spec
         spec = self._specs[name]
-        allowed = {p.name for p in spec.parameters}
-        filtered = {k: v for k, v in args.items() if k in allowed}
-        return await handler(**filtered)
+        try:
+            filtered = _validate_args(spec, args)
+        except ValueError as exc:
+            return ToolResult(
+                tool=name,
+                ok=False,
+                error=f"INVALID_ARGUMENT: {exc}",
+                meta={"error_code": "INVALID_ARGUMENT"},
+            )
+        try:
+            result = await handler(**filtered)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("skill %s raised while dispatching", name)
+            return ToolResult(
+                tool=name,
+                ok=False,
+                error=f"SKILL_EXECUTION_ERROR: {type(exc).__name__}: {exc}",
+                meta={"error_code": "SKILL_EXECUTION_ERROR"},
+            )
+        if result.ok:
+            try:
+                _validate_result(spec, result)
+            except ValueError as exc:
+                logger.error("skill %s returned an invalid result: %s", name, exc)
+                return ToolResult(
+                    tool=name,
+                    ok=False,
+                    error=f"INVALID_RESULT: {exc}",
+                    trace_id=result.trace_id,
+                    duration_ms=result.duration_ms,
+                    meta={"error_code": "INVALID_RESULT"},
+                )
+        return result
+
+
+def _validate_args(spec: ToolSpec, args: dict[str, Any]) -> dict[str, Any]:
+    """Validate the public ToolSpec contract before reaching vendor code.
+
+    We intentionally reject unknown fields instead of silently dropping them:
+    a planner bug must be observable, especially when it changes a financial
+    query's time window or universe.
+    """
+    if not isinstance(args, dict):
+        raise ValueError("arguments must be a JSON object")
+    by_name = {p.name: p for p in spec.parameters}
+    unknown = sorted(set(args) - set(by_name))
+    if unknown:
+        raise ValueError(f"unknown parameter(s): {', '.join(unknown)}")
+    clean: dict[str, Any] = {}
+    for name, p in by_name.items():
+        value = args.get(name, p.default)
+        if value is None:
+            if p.required:
+                raise ValueError(f"missing required parameter '{name}'")
+            continue
+        if p.type == "string":
+            if not isinstance(value, str):
+                raise ValueError(f"parameter '{name}' must be a string")
+            value = value.strip()
+            if p.required and not value:
+                raise ValueError(f"parameter '{name}' must not be empty")
+            if p.min_length is not None and len(value) < p.min_length:
+                raise ValueError(f"parameter '{name}' is too short")
+            if p.max_length is not None and len(value) > p.max_length:
+                raise ValueError(f"parameter '{name}' exceeds {p.max_length} characters")
+            if p.pattern is not None and not re.fullmatch(p.pattern, value):
+                raise ValueError(f"parameter '{name}' has an invalid format")
+        elif p.type == "integer":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"parameter '{name}' must be an integer")
+        elif p.type == "number":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"parameter '{name}' must be a number")
+        elif p.type == "boolean" and not isinstance(value, bool):
+            raise ValueError(f"parameter '{name}' must be a boolean")
+        elif p.type == "array" and not isinstance(value, list):
+            raise ValueError(f"parameter '{name}' must be an array")
+        elif p.type == "object" and not isinstance(value, dict):
+            raise ValueError(f"parameter '{name}' must be an object")
+        if p.enum is not None and value not in p.enum:
+            raise ValueError(f"parameter '{name}' must be one of {p.enum}")
+        if p.type in {"integer", "number"}:
+            if p.ge is not None and value < p.ge:
+                raise ValueError(f"parameter '{name}' must be >= {p.ge}")
+            if p.le is not None and value > p.le:
+                raise ValueError(f"parameter '{name}' must be <= {p.le}")
+        clean[name] = value
+    return clean
+
+
+def _validate_result(spec: ToolSpec, result: ToolResult) -> None:
+    """Small, dependency-free JSON-schema subset for every successful tool."""
+    if result.data is None:
+        raise ValueError("successful result must contain data")
+    schema = spec.returns_schema
+    if not schema:
+        return
+    data = result.data
+    if schema.get("type") == "object" and not isinstance(data, dict):
+        raise ValueError("data must be an object")
+    if schema.get("type") == "array" and not isinstance(data, list):
+        raise ValueError("data must be an array")
+    if isinstance(data, dict):
+        required = schema.get("required", [])
+        missing = [key for key in required if key not in data]
+        if missing:
+            raise ValueError(f"missing result field(s): {', '.join(missing)}")
+        for key, rule in (schema.get("properties", {}) or {}).items():
+            if key not in data:
+                continue
+            expected = rule.get("type") if isinstance(rule, dict) else None
+            value = data[key]
+            if expected == "array" and not isinstance(value, list):
+                raise ValueError(f"result field '{key}' must be an array")
+            if expected == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+                raise ValueError(f"result field '{key}' must be an integer")
 
 
 # Global singleton

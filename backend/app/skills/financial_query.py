@@ -13,6 +13,7 @@ import httpx
 
 from app.config import get_settings
 from app.skills.base import ToolParameter, ToolResult, ToolSpec
+from app.skills.provenance import IWENCAI_SOURCE, item_citations, retrieved_at
 from app.skills.registry import REGISTRY
 from app.utils.trace import generate_trace_id
 
@@ -96,8 +97,17 @@ async def financial_query_handler(
             "code_count": body.get("code_count", 0),
             "chunks_info": body.get("chunks_info", {}),
         },
-        meta={"status_code": status_code, "returned": len(body.get("datas", []))},
+        meta={
+            "status_code": status_code,
+            "returned": len(body.get("datas", [])),
+            "cache_possible": True,
+            "data_time_note": "接口可能返回缓存；具体数据时点请以结果字段为准。",
+        },
         trace_id=trace_id,
+        source=IWENCAI_SOURCE,
+        as_of=(as_of := retrieved_at()),
+        citations=item_citations(body.get("datas", []), skill=SKILL_LOCAL_NAME, query=query, as_of=as_of),
+        raw_ref=f"iwencai://query2data/{trace_id}",
     )
 
 
@@ -115,20 +125,31 @@ FINANCIAL_QUERY_SPEC = ToolSpec(
             name="query",
             type="string",
             description="自然语言查询问句（中文），例如：'贵州茅台 PE(TTM)'、'银行 股息率前10'、'今日涨停 行业=科技'。",
+            min_length=1,
+            max_length=500,
         ),
         ToolParameter(
             name="page",
             type="string",
             description="分页页码，默认 1。",
             required=False,
+            default="1",
+            pattern=r"[1-9][0-9]{0,2}",
         ),
         ToolParameter(
             name="limit",
             type="string",
             description="每页条数，默认 10，最高 500。",
             required=False,
+            default="10",
+            pattern=r"(?:[1-9][0-9]?|[1-4][0-9]{2}|500)",
         ),
     ],
+    returns_schema={
+        "type": "object",
+        "required": ["datas", "code_count", "chunks_info"],
+        "properties": {"datas": {"type": "array"}, "code_count": {"type": "integer"}},
+    },
     requires=["IWENCAI_API_KEY"],
     examples=[
         {"query": "贵州茅台 最新价", "limit": "5"},

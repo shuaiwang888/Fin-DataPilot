@@ -17,6 +17,7 @@ from app.agent.graph import run_agent_stream
 from app.agent.runtime import ACTIVE_RUNS
 from app.config import get_settings
 from app.memory import build_memory_context, update_memory_after_turn
+from app.skills.configuration import refresh_published_skill_configuration
 from app.security import AuthContext, require_user
 from app.storage.repository import (
     append_agent_run_event_async,
@@ -26,6 +27,7 @@ from app.storage.repository import (
     get_agent_run_for_user_async,
     get_session_for_user_async,
     list_messages_async,
+    request_agent_run_cancel_async,
     save_message_async,
 )
 
@@ -176,6 +178,7 @@ async def chat_stream(
     auth: AuthContext = Depends(require_user),
 ) -> Any:
     """Start one run. Identity is derived only from the bearer token."""
+    await refresh_published_skill_configuration()
 
     async def event_gen() -> AsyncIterator[str]:
         session_id = body.session_id
@@ -267,10 +270,11 @@ async def stop_chat_run(
         raise HTTPException(404, "Run not found")
     if run["status"] != "running":
         return {"run_id": body.run_id, "cancelled": False}
+    requested = await request_agent_run_cancel_async(body.run_id, auth.user_id)
     cancelled = await ACTIVE_RUNS.cancel(body.run_id)
     if cancelled:
         await finish_agent_run_async(body.run_id, "cancelled", error="cancelled by user")
-    return {"run_id": body.run_id, "cancelled": cancelled}
+    return {"run_id": body.run_id, "cancelled": cancelled, "cancellation_requested": requested}
 
 
 @router.get("/runs/{run_id}")

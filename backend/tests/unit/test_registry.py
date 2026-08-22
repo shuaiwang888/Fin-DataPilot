@@ -35,10 +35,10 @@ async def test_register_and_list(reg: ToolRegistry) -> None:
     assert specs[0].name == "echo"
 
 
-async def test_dispatch_filters_args(reg: ToolRegistry) -> None:
+async def test_dispatch_rejects_unknown_args(reg: ToolRegistry) -> None:
     result = await reg.dispatch("echo", {"text": "hi", "injected": "nope"})
-    assert result.ok
-    assert result.data == {"text": "hi"}
+    assert not result.ok
+    assert "INVALID_ARGUMENT" in (result.error or "")
 
 
 async def test_dispatch_unknown_tool(reg: ToolRegistry) -> None:

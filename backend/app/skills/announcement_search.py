@@ -8,6 +8,7 @@ import httpx
 
 from app.config import get_settings
 from app.skills.base import ToolParameter, ToolResult, ToolSpec
+from app.skills.provenance import IWENCAI_SOURCE, item_citations, retrieved_at
 from app.skills.registry import REGISTRY
 from app.utils.trace import generate_trace_id
 
@@ -86,6 +87,10 @@ async def announcement_search_handler(
         },
         meta={"raw_status": resp.status_code, "returned": len(items)},
         trace_id=trace_id,
+        source=IWENCAI_SOURCE,
+        as_of=(as_of := retrieved_at()),
+        citations=item_citations(items, skill=SKILL_LOCAL_NAME, query=query, as_of=as_of),
+        raw_ref=f"iwencai://comprehensive/search/{trace_id}",
     )
 
 
@@ -97,10 +102,11 @@ ANNOUNCEMENT_SEARCH_SPEC = ToolSpec(
     ),
     category="events",
     parameters=[
-        ToolParameter(name="query", type="string", description="搜索关键词（公司名/股票代码/事件类型）"),
-        ToolParameter(name="limit", type="string", description="返回条数，默认 10", required=False),
-        ToolParameter(name="days", type="string", description="时间范围（天），默认 90", required=False),
+        ToolParameter(name="query", type="string", description="搜索关键词（公司名/股票代码/事件类型）", min_length=1, max_length=500),
+        ToolParameter(name="limit", type="string", description="返回条数，默认 10", required=False, default="10", pattern=r"(?:[1-9]|[1-9][0-9]|100)"),
+        ToolParameter(name="days", type="string", description="时间范围（天），默认 90", required=False, default="90", pattern=r"(?:[1-9]|[1-9][0-9]|[12][0-9]{2}|365)"),
     ],
+    returns_schema={"type": "object", "required": ["announcements", "count"], "properties": {"announcements": {"type": "array"}, "count": {"type": "integer"}}},
     requires=["IWENCAI_API_KEY"],
     examples=[{"query": "贵州茅台 分红派息", "limit": "10"}],
 )

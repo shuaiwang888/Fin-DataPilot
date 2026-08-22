@@ -20,6 +20,12 @@ class ToolParameter(BaseModel):
     enum: list[Any] | None = None
     items: dict[str, Any] | None = None
     properties: dict[str, Any] | None = None
+    default: Any = None
+    min_length: int | None = None
+    max_length: int | None = None
+    ge: float | None = None
+    le: float | None = None
+    pattern: str | None = None
 
     def to_json_schema(self) -> dict[str, Any]:
         """Convert this parameter to a JSON-Schema fragment for the LLM tool call."""
@@ -30,6 +36,16 @@ class ToolParameter(BaseModel):
             schema["items"] = self.items
         if self.type == "object" and self.properties is not None:
             schema["properties"] = self.properties
+        if self.min_length is not None:
+            schema["minLength"] = self.min_length
+        if self.max_length is not None:
+            schema["maxLength"] = self.max_length
+        if self.ge is not None:
+            schema["minimum"] = self.ge
+        if self.le is not None:
+            schema["maximum"] = self.le
+        if self.pattern is not None:
+            schema["pattern"] = self.pattern
         return schema
 
 
@@ -82,6 +98,12 @@ class ToolResult:
     trace_id: str = ""
     duration_ms: int = 0
     meta: dict[str, Any] | None = None
+    # Provenance is first-class. ``as_of`` is the retrieval/data timestamp
+    # supplied by the source, never an LLM-inferred market timestamp.
+    source: str | None = None
+    as_of: str | None = None
+    citations: list[dict[str, Any]] | None = None
+    raw_ref: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +114,10 @@ class ToolResult:
             "trace_id": self.trace_id,
             "duration_ms": self.duration_ms,
             "meta": self.meta or {},
+            "source": self.source,
+            "as_of": self.as_of,
+            "citations": self.citations or [],
+            "raw_ref": self.raw_ref,
         }
 
 

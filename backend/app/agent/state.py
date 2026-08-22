@@ -58,6 +58,7 @@ class AgentState(TypedDict, total=False):
     # TypedDict, which silently breaks the multi-step loop.
     next_skill_hint: str | None
     next_args_hint: dict[str, Any] | None
+    policy_notices: list[str]
 
     # ---- outputs ----
     final_answer: str

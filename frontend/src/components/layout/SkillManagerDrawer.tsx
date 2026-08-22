@@ -18,6 +18,9 @@ import { api } from "../../lib/api";
 import type { SkillItem } from "../../lib/types";
 
 const { Dragger } = Upload;
+// This public SPA has only an anonymous bearer identity. It must never try to
+// act as the operator or expose an ADMIN_API_KEY in a VITE_* variable.
+const CAN_MANAGE_SKILLS = false;
 
 export function SkillManagerDrawer() {
   const skills = useSkillStore();
@@ -75,7 +78,7 @@ export function SkillManagerDrawer() {
         width={560}
       >
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <Dragger
+          {CAN_MANAGE_SKILLS && <Dragger
             name="file"
             accept=".zip"
             multiple={false}
@@ -104,12 +107,16 @@ export function SkillManagerDrawer() {
               {uploading ? "正在安装…" : "点击或拖入 .zip 文件上传新 Skill"}
             </p>
             <p className="ant-upload-hint" style={{ fontSize: 12, color: "#999" }}>
-              支持两种 zip：<br />
-              • <b>代码 skill</b>：顶层目录 + SKILL.md + 同名 .py handler<br />
-              • <b>知识 skill</b>：仅一个 SKILL.md（frontmatter 含 name + description）<br />
-              （≤ 20 MB）
+              仅支持经管理员审核的 prompt-only Skill（≤ 20 MB）。<br />
+              代码 Skill 不会在服务进程中执行。
             </p>
-          </Dragger>
+          </Dragger>}
+
+          {!CAN_MANAGE_SKILLS && (
+            <div style={{ color: "#666", fontSize: 12 }}>
+              已发布 Skill 由管理员统一审核、配置和启用；当前账号仅可使用已发布能力。
+            </div>
+          )}
 
           {skills.skills.length === 0 ? (
             <Empty description="加载中..." />
@@ -136,7 +143,7 @@ export function SkillManagerDrawer() {
                     {s.kind === "code" && <Tag color="purple">用户代码</Tag>}
                   </div>
                   <Space size={4}>
-                    {s.uploaded && (
+                    {CAN_MANAGE_SKILLS && s.uploaded && (
                       <Popconfirm
                         title="确定删除？"
                         description={`将移除「${s.spec.display_name}」及其磁盘文件。此操作不可撤销。`}
@@ -148,10 +155,10 @@ export function SkillManagerDrawer() {
                         <Button danger size="small">删除</Button>
                       </Popconfirm>
                     )}
-                    <Switch
+                    {CAN_MANAGE_SKILLS && <Switch
                       checked={s.enabled}
                       onChange={(v) => handleToggle(s, v)}
-                    />
+                    />}
                   </Space>
                 </div>
                 <div style={{ color: "#666", fontSize: 12, marginBottom: 8 }}>{s.spec.description}</div>
@@ -186,7 +193,7 @@ export function SkillManagerDrawer() {
                     })()}
                   </div>
                 )}
-                {s.enabled && s.spec.parameters.length > 0 && (
+                {CAN_MANAGE_SKILLS && s.enabled && s.spec.parameters.length > 0 && (
                   <Form size="small" layout="inline" style={{ marginTop: 8 }}>
                     {s.spec.parameters.map((p) => (
                       <Form.Item
@@ -215,7 +222,7 @@ export function SkillManagerDrawer() {
                     </Button>
                   </Form>
                 )}
-                {s.kind === "prompt" && (
+                {CAN_MANAGE_SKILLS && s.kind === "prompt" && (
                   <Button
                     size="small"
                     style={{ marginTop: 8 }}

@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.storage.db import SessionLocal
-from app.storage.models import AgentRun, LongTermMemory, Message, Session, SessionMemory
+from app.storage.models import AgentRun, LongTermMemory, Message, Session, SessionMemory, SkillPref, ToolRun
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +275,47 @@ async def list_messages_async(session_id: str) -> list[dict[str, Any]]:
         return out
 
 
+# ---------- persisted global Skill configuration ----------
+
+# Published/disabled is an operator decision shared by every browser. It is
+# intentionally not a user preference: ordinary users can only see published
+# Skills, never turn an unreviewed integration on for everyone.
+SYSTEM_SKILL_PREF_USER = "__system__"
+
+
+async def list_published_skill_preferences_async() -> dict[str, bool]:
+    async with SessionLocal() as db:
+        result = await db.execute(select(SkillPref).where(SkillPref.user_id == SYSTEM_SKILL_PREF_USER))
+        return {row.skill_name: bool(row.enabled) for row in result.scalars().all()}
+
+
+async def set_published_skill_preference_async(name: str, enabled: bool) -> None:
+    async with SessionLocal() as db:
+        existing = await db.get(SkillPref, {"user_id": SYSTEM_SKILL_PREF_USER, "skill_name": name})
+        if existing is None:
+            db.add(SkillPref(user_id=SYSTEM_SKILL_PREF_USER, skill_name=name, enabled=int(enabled)))
+        else:
+            existing.enabled = int(enabled)
+        await db.commit()
+
+
+async def save_tool_run_async(
+    *, session_id: str | None, skill_name: str, args: dict[str, Any], result: dict[str, Any],
+    ok: bool, duration_ms: int, trace_id: str | None,
+) -> None:
+    """Persist each external call and its source metadata for later audit."""
+    import json
+
+    async with SessionLocal() as db:
+        db.add(ToolRun(
+            id=_new_id(), session_id=session_id, skill_name=skill_name,
+            args_json=json.dumps(args, ensure_ascii=False),
+            result_json=json.dumps(result, ensure_ascii=False), ok=int(ok),
+            duration_ms=duration_ms, trace_id=trace_id,
+        ))
+        await db.commit()
+
+
 # ---------- durable agent runs ----------
 
 async def create_agent_run_async(session_id: str, user_id: str, query: str) -> str:
@@ -312,10 +354,41 @@ async def finish_agent_run_async(
         run = await db.get(AgentRun, run_id)
         if run is None:
             return
+        # A cancellation requested by another replica wins over a later normal
+        # completion. This avoids resurrecting a run a user already stopped.
+        if run.status in {"cancelled", "cancelling"} and status == "completed":
+            status = "cancelled"
+            error = error or "cancelled by user"
         run.status = status
         run.final_text = final_text
         run.error = error
         await db.commit()
+
+
+async def request_agent_run_cancel_async(run_id: str, user_id: str) -> bool:
+    """Durably request cancellation so a worker on any replica can see it."""
+    async with SessionLocal() as db:
+        result = await db.execute(select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id))
+        run = result.scalar_one_or_none()
+        if run is None or run.status not in {"running", "cancelling"}:
+            return False
+        run.status = "cancelling"
+        await db.commit()
+        return True
+
+
+async def is_agent_run_cancel_requested_async(run_id: str | None) -> bool:
+    if not run_id:
+        return False
+    try:
+        async with SessionLocal() as db:
+            run = await db.get(AgentRun, run_id)
+            return run is not None and run.status in {"cancelling", "cancelled"}
+    except SQLAlchemyError:
+        # The execution path can still run during a transient database outage;
+        # no durable cancellation was observed in that case.
+        logger.warning("could not read cancellation state for run=%s", run_id, exc_info=True)
+        return False
 
 
 async def get_agent_run_for_user_async(run_id: str, user_id: str) -> dict[str, Any] | None:

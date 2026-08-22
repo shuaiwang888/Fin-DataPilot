@@ -22,6 +22,7 @@ from app.config import get_settings
 from app.db_init import init_db
 from app.skills import registry as _skills_registry  # noqa: F401 — trigger registration
 from app.skills.user_uploads import load_uploaded_skills_at_startup
+from app.skills.configuration import refresh_published_skill_configuration
 from app.utils.trace import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             n_loaded,
             settings.user_skills_dir,
         )
+    await refresh_published_skill_configuration()
     yield
 
 

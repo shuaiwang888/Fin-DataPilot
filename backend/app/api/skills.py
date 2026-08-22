@@ -9,6 +9,7 @@ from slowapi.util import get_remote_address
 from app.config import get_settings
 from app.security import AuthContext, require_admin, require_user
 from app.skills import user_uploads
+from app.skills.configuration import refresh_published_skill_configuration, set_published_skill_configuration
 from app.skills.registry import REGISTRY
 
 router = APIRouter()
@@ -34,6 +35,7 @@ async def list_skills(auth: AuthContext = Depends(require_user)) -> dict[str, ob
     field ("code" / "prompt" / "builtin") so the UI can render
     prompt-only skills differently."""
     settings = get_settings()
+    await refresh_published_skill_configuration()
     user_root = settings.user_skills_dir
     _ = auth
     return {
@@ -77,7 +79,7 @@ async def toggle_skill(
     _ = admin
     if not REGISTRY.get_spec(name):
         raise HTTPException(404, f"Unknown skill '{name}'")
-    REGISTRY.set_enabled(name, body.enabled)
+    await set_published_skill_configuration(name, body.enabled)
     return {"name": name, "enabled": body.enabled}
 
 
@@ -112,9 +114,7 @@ async def upload_skill(
     file: UploadFile = File(...),
     admin: AuthContext = Depends(require_admin),
 ) -> dict[str, object]:
-    """Upload a new skill as a zip file. See backend/app/skills/user_uploads.py
-    for the expected zip layout (one top-level directory containing
-    SKILL.md and a handler module)."""
+    """Upload an operator-reviewed prompt-only SKILL.md zip."""
     settings = get_settings()
     _ = admin
     if not settings.enable_skill_upload:

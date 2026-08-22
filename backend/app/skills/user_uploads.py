@@ -1,20 +1,13 @@
 """Runtime user-uploaded skills: install / uninstall / startup reload.
 
-Two kinds of skills are supported:
-
-  - **Code skill** (zip with a <name>.py handler): the handler is
-    importlib-loaded, registers its own ToolSpec, and calls a real API.
-
-  - **Prompt skill** (zip with ONLY a SKILL.md): the SKILL.md body is
-    injected into the LLM's system prompt as domain knowledge. No code
-    is loaded. A synthetic echo handler is registered so the skill
-    appears in /api/skills and can be "tested" (returns the body).
+Only **prompt skills** are supported: a zip containing ``SKILL.md``. Its body
+is injected as bounded, untrusted reference material; no tenant-supplied code
+is imported or executed in the API process.
 
 Zip layouts accepted (auto-detected by content, not by layout):
   (a)  <name>/
          SKILL.md               (required, frontmatter: name, description)
-         <name>.py              (optional, only for code skills)
-         [other files]          (optional, ignored)
+         [other files]          (optional, ignored; Python files rejected)
   (b)  SKILL.md                 (flat — root of the zip)
          [other files]          (optional, ignored)
 
@@ -24,8 +17,7 @@ uninstall and reload paths uniform.
 
 Lifecycle:
   1. install_skill_from_zip(): extract → validate → move to user_skills_dir
-     → either exec the handler module (code) or register an echo handler
-     with the body (prompt). Roll back on any failure.
+     → register an echo handler with the body. Roll back on any failure.
   2. uninstall_skill(name): REGISTRY.unregister + rmtree the directory.
   3. load_uploaded_skills_at_startup(): walk user_skills_dir at app
      startup, re-import every previously uploaded skill so they

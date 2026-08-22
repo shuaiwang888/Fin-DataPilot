@@ -135,6 +135,13 @@ async def run_agent_stream(
         EV_TOOL_RESULT,
     )
     from app.utils.trace import generate_trace_id
+    from app.agent.policy import assess_user_query
+
+    policy = assess_user_query(user_query)
+    if not policy.allowed:
+        yield {"event": EV_ERROR, "data": {"message": policy.message, "code": policy.code}}
+        yield {"event": EV_DONE, "data": {}}
+        return
 
     if not REGISTRY.list_specs():
         yield {"event": EV_ERROR, "data": {"message": "No skills registered"}}
@@ -162,6 +169,7 @@ async def run_agent_stream(
         "next_skill_hint": None,
         "next_args_hint": None,
         "router_action": "continue",
+        "policy_notices": list(policy.notices),
     }
     yield {
         "event": EV_THINK,

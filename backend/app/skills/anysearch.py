@@ -26,6 +26,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.skills.base import ToolParameter, ToolResult, ToolSpec
+from app.skills.provenance import retrieved_at
 from app.skills.registry import REGISTRY
 from app.utils.trace import generate_trace_id
 
@@ -532,6 +533,19 @@ async def anysearch_handler(
         },
         trace_id=trace_id,
         duration_ms=duration_ms,
+        source="AnySearch",
+        as_of=(as_of := retrieved_at()),
+        citations=[
+            {
+                "id": f"{SKILL_LOCAL_NAME}:anysearch",
+                "source": "AnySearch",
+                "title": "AnySearch 查询结果",
+                "url": url if action == "extract" and url else "https://anysearch.ai/",
+                "query": query,
+                "retrieved_at": as_of,
+            }
+        ],
+        raw_ref=f"anysearch://{trace_id}",
     )
 
 
@@ -589,6 +603,9 @@ def _build_spec() -> ToolSpec:
                 type="integer",
                 description="[search] 返回条数，1-10，默认 10",
                 required=False,
+                default=10,
+                ge=1,
+                le=10,
             ),
             ToolParameter(
                 name="domain",
