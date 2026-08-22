@@ -4,11 +4,67 @@ import type { ChatMessage } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { streamChat } from "../lib/sse";
 import { api } from "../lib/api";
+import type { AgentRun } from "../lib/api";
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 /** Text the synthesizer placeholders carry (matched in ThinkingPanel.tsx). */
 const THINKING_PLACEHOLDER_TEXT = "💭 思考中…";
+const RECOVERY_POLL_INTERVAL_MS = 2_000;
+const RECOVERY_MAX_POLLS = 70;
+
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function recoverDurableRun(runId: string, signal: AbortSignal): Promise<AgentRun | null> {
+  for (let attempt = 0; attempt < RECOVERY_MAX_POLLS; attempt += 1) {
+    if (signal.aborted) {
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    }
+    try {
+      const run = await api.getRun(runId, signal);
+      if (run.status !== "running") return run;
+    } catch (error) {
+      if ((error as Error).name === "AbortError" || signal.aborted) throw error;
+      // A short polling request may also hit a transient proxy reset. Keep
+      // retrying; the server-side task and durable run record are independent.
+    }
+    await delay(RECOVERY_POLL_INTERVAL_MS, signal);
+  }
+  return null;
+}
+
+function applyRecoveredAnswer(content: string): void {
+  useChatStore.setState((state) => {
+    const cleaned = stripThinkingPlaceholders(state.messages) ?? state.messages;
+    const messages = [...cleaned];
+    const last = messages[messages.length - 1];
+    if (last?.role === "assistant") {
+      messages[messages.length - 1] = { ...last, content, streaming: false };
+    }
+    return {
+      messages,
+      pendingText: "",
+      streaming: false,
+      answerStarted: false,
+    };
+  });
+}
 
 /** Remove every "💭 思考中…" placeholder step from the last assistant
  *  message's thinking array. Called when:
@@ -65,6 +121,34 @@ export function useChatStream() {
       // session mid-stream, the store's sessionId changes for a
       // DIFFERENT reason and no longer matches — that's when we bail.
       let requestSessionId = useChatStore.getState().sessionId;
+      const recoverActiveRun = async (runId: string) => {
+        chat.appendThinking({
+          id: `t_recover_${Date.now()}`,
+          step: "recover",
+          text: "连接已切换为后台恢复，正在等待任务完成…",
+          ts: Date.now(),
+        });
+        try {
+          const recovered = await recoverDurableRun(runId, controller.signal);
+          if (recovered?.status === "completed" && recovered.final_text) {
+            applyRecoveredAnswer(recovered.final_text);
+          } else if (recovered?.status === "cancelled") {
+            applyRecoveredAnswer("⏹ 任务已停止。");
+          } else if (recovered?.status === "failed") {
+            applyRecoveredAnswer(`⚠️ ${recovered.error ?? "任务执行失败"}`);
+          } else {
+            applyRecoveredAnswer(
+              "网络连接中断，后台任务暂时仍未完成。可稍后从当前会话历史查看结果。",
+            );
+          }
+        } catch (recoveryError) {
+          if ((recoveryError as Error).name === "AbortError" || controller.signal.aborted) {
+            applyRecoveredAnswer("⏹ 已停止生成。");
+          } else {
+            applyRecoveredAnswer("网络连接中断，且暂时无法恢复后台结果。请稍后重试。");
+          }
+        }
+      };
       try {
         for await (const ev of streamChat(
           url,
@@ -339,6 +423,13 @@ export function useChatStream() {
             chat.finalizeAssistant();
           }
         }
+        // Some proxies terminate a chunked response as a clean EOF instead
+        // of surfacing a fetch error. A remaining run id means no terminal
+        // run_status arrived, so recover exactly as we do for a thrown reset.
+        const unfinishedRunId = runIdRef.current;
+        if (unfinishedRunId && !controller.signal.aborted) {
+          await recoverActiveRun(unfinishedRunId);
+        }
       } catch (err) {
         const e = err as Error & { name?: string };
         if (e.name === "AbortError" || controller.signal.aborted) {
@@ -363,15 +454,17 @@ export function useChatStream() {
             };
           });
         } else {
-          // Network errors (connection drop, HF proxy timeout) are often
-          // transient. Show a friendly message + offer a one-click retry
-          // by re-sending the same query.
-          const msg = e?.message ?? "出错了";
-          const friendly = /network|fetch|aborted|timeout/i.test(msg)
-            ? "网络连接中断（HF Space 代理超时）。请重试，或检查后端是否还在运行。"
-            : `⚠️ ${msg}`;
-          chat.appendToken(`\n\n${friendly}\n\n如需重试，请直接重新发送上一条问题。`);
-          chat.finalizeAssistant();
+          const recoverRunId = runIdRef.current;
+          if (recoverRunId) {
+            await recoverActiveRun(recoverRunId);
+          } else {
+            const msg = e?.message ?? "出错了";
+            const friendly = /network|fetch|aborted|timeout/i.test(msg)
+              ? "网络连接中断（HF Space 代理超时）。请稍后重试。"
+              : `⚠️ ${msg}`;
+            chat.appendToken(`\n\n${friendly}`);
+            chat.finalizeAssistant();
+          }
         }
       } finally {
         abortRef.current = null;
