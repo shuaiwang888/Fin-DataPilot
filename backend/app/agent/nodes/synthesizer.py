@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import suppress
 from typing import Any
 
@@ -268,7 +268,7 @@ class _StreamingAnswerSanitizer:
         return tail
 
 
-def _collect_citations(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _collect_citations(calls: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     citations: list[dict[str, Any]] = []
     for call in calls:
