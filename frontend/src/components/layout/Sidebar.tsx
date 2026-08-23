@@ -6,6 +6,10 @@ import {
   AppstoreOutlined,
   ClearOutlined,
   BulbOutlined,
+  BankOutlined,
+  MessageOutlined,
+  ClockCircleOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { useSessionStore } from "../../stores/sessionStore";
@@ -14,7 +18,21 @@ import { useSkillStore } from "../../stores/skillStore";
 import { api } from "../../lib/api";
 import type { MemoryItem } from "../../lib/api";
 
-export function Sidebar() {
+interface SidebarProps {
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}
+
+function formatSessionTime(value: string) {
+  const date = new Date(value);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  return sameDay
+    ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
   // Selector-based subscriptions so streaming token updates (which
   // mutate chatStore.messages / pendingText every frame) don't
   // re-render the entire session list. Previously `useChatStore()`
@@ -110,6 +128,7 @@ export function Sidebar() {
   const handleNew = async () => {
     chatReset();
     setActive(null);
+    onMobileClose?.();
   };
 
   const handleSelect = async (id: string) => {
@@ -119,6 +138,7 @@ export function Sidebar() {
     // primary fix for the "click a session and the old stream keeps
     // writing into the new one" bug.
     setActive(id);
+    onMobileClose?.();
     chatSetSession(id);
     const ctrl = new AbortController();
     try {
@@ -164,30 +184,37 @@ export function Sidebar() {
   };
 
   return (
-    <div className="fdp-sidebar">
-      <div style={{ padding: 12, borderBottom: "1px solid #f0f0f0" }}>
+    <aside className={`fdp-sidebar ${mobileOpen ? "is-mobile-open" : ""}`}>
+      <div className="fdp-brand">
+        <div className="fdp-brand-mark"><BankOutlined /></div>
+        <div className="fdp-brand-name">
+          <strong>Fin DataPilot</strong>
+          <span>AI RESEARCH WORKSPACE</span>
+        </div>
+      </div>
+      <div className="fdp-new-chat-wrap">
         <Button
           type="primary"
           icon={<PlusOutlined />}
           onClick={handleNew}
           block
           size="large"
+          className="fdp-new-chat"
         >
-          新对话
+          新建分析
         </Button>
       </div>
-      <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+      <div className="fdp-sidebar-section-head">
+        <span><ClockCircleOutlined /> 最近会话</span>
+        <span className="fdp-session-count">{sessions.length}</span>
+      </div>
+      <div className="fdp-session-list">
         <List
           dataSource={sessions}
-          locale={{ emptyText: <div style={{ color: "#bbb", textAlign: "center", padding: 24 }}>暂无对话</div> }}
+          locale={{ emptyText: <div className="fdp-empty-sessions"><MessageOutlined /><span>暂无分析记录</span></div> }}
           renderItem={(s) => (
             <List.Item
-              style={{
-                padding: "8px 12px",
-                cursor: "pointer",
-                background: activeId === s.id ? "#e6f4ff" : undefined,
-                border: "none",
-              }}
+              className={`fdp-session-item ${activeId === s.id ? "is-active" : ""}`}
               onClick={() => editingId !== s.id && handleSelect(s.id)}
               actions={
                 editingId === s.id
@@ -247,24 +274,28 @@ export function Sidebar() {
                   size="small"
                 />
               ) : (
-                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {s.title || "新对话"}
+                <div className="fdp-session-content">
+                  <span className="fdp-session-title">{s.title || "新对话"}</span>
+                  <span className="fdp-session-time">{formatSessionTime(s.updated_at || s.created_at)}</span>
                 </div>
               )}
             </List.Item>
           )}
         />
       </div>
-      <div style={{ borderTop: "1px solid #f0f0f0", padding: 12 }}>
-        <Button block icon={<BulbOutlined />} onClick={openMemories} style={{ marginBottom: 8 }}>
+      <div className="fdp-sidebar-footer">
+        <div className="fdp-sidebar-footer-label">工作区</div>
+        <Button block type="text" icon={<BulbOutlined />} onClick={openMemories}>
           记忆管理
         </Button>
         <Button
           block
+          type="text"
           icon={<AppstoreOutlined />}
           onClick={() => openSkillDrawer(true)}
         >
-          Skill 管理 ({skillEnabled}/{skillTotal})
+          <span>分析能力</span>
+          <span className="fdp-skill-count">{skillEnabled}/{skillTotal}</span>
         </Button>
         {sessions.length > 0 && (
           <Popconfirm
@@ -281,12 +312,16 @@ export function Sidebar() {
               danger
               size="small"
               icon={<ClearOutlined />}
-              style={{ marginTop: 8 }}
             >
               清空历史
             </Button>
           </Popconfirm>
         )}
+        <div className="fdp-profile-card">
+          <div className="fdp-profile-avatar">DP</div>
+          <div className="fdp-profile-copy"><strong>本地研究员</strong><span>匿名安全会话</span></div>
+          <SettingOutlined />
+        </div>
       </div>
       <Modal
         title="记忆管理"
@@ -326,6 +361,6 @@ export function Sidebar() {
           )}
         />
       </Modal>
-    </div>
+    </aside>
   );
 }
