@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { App as AntdApp, Button, Tooltip } from "antd";
 import {
   AppstoreOutlined,
@@ -8,19 +8,46 @@ import {
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { Sidebar } from "./components/layout/Sidebar";
-import { SkillManagerDrawer } from "./components/layout/SkillManagerDrawer";
 import { ChatWindow } from "./components/chat/ChatWindow";
 import { MessageInput } from "./components/chat/MessageInput";
 import { useSessionStore } from "./stores/sessionStore";
 import { useSkillStore } from "./stores/skillStore";
+import { api } from "./lib/api";
+
+const SkillManagerDrawer = lazy(() =>
+  import("./components/layout/SkillManagerDrawer").then((module) => ({
+    default: module.SkillManagerDrawer,
+  })),
+);
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [skillManagerMounted, setSkillManagerMounted] = useState(false);
   const sessions = useSessionStore((s) => s.sessions);
   const activeId = useSessionStore((s) => s.activeId);
   const openSkillDrawer = useSkillStore((s) => s.setDrawerOpen);
+  const skillDrawerOpen = useSkillStore((s) => s.drawerOpen);
+  const setSkills = useSkillStore((s) => s.setSkills);
   const enabledSkills = useSkillStore((s) => s.skills.filter((skill) => skill.enabled).length);
   const activeSession = sessions.find((session) => session.id === activeId);
+
+  useEffect(() => {
+    if (skillDrawerOpen) setSkillManagerMounted(true);
+  }, [skillDrawerOpen]);
+
+  // Keep the small capability summary available in the toolbar while the
+  // feature-heavy manager UI stays outside the initial JavaScript bundle.
+  useEffect(() => {
+    const controller = new AbortController();
+    api.listSkills(controller.signal)
+      .then((result) => setSkills(result.skills))
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") {
+          // Offline startup is non-fatal; the drawer can retry on refresh.
+        }
+      });
+    return () => controller.abort();
+  }, [setSkills]);
 
   return (
     <AntdApp>
@@ -73,7 +100,11 @@ export default function App() {
           <ChatWindow />
           <MessageInput />
         </div>
-        <SkillManagerDrawer />
+        {skillManagerMounted && (
+          <Suspense fallback={null}>
+            <SkillManagerDrawer />
+          </Suspense>
+        )}
       </div>
     </AntdApp>
   );

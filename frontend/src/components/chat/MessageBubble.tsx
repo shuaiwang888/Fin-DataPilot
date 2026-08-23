@@ -1,6 +1,5 @@
 import { Bubble } from "@ant-design/x";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { lazy, memo, Suspense } from "react";
 import type { ChatMessage } from "../../stores/chatStore";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { ToolCallCard } from "./ToolCallCard";
@@ -11,7 +10,9 @@ interface Props {
   msg: ChatMessage;
 }
 
-export function MessageBubble({ msg }: Props) {
+const MarkdownContent = lazy(() => import("./MarkdownContent"));
+
+export const MessageBubble = memo(function MessageBubble({ msg }: Props) {
   const isUser = msg.role === "user";
   const content = isUser
     ? msg.content
@@ -35,25 +36,20 @@ export function MessageBubble({ msg }: Props) {
           content={content}
           placement={isUser ? "end" : "start"}
           loading={msg.streaming && !msg.content}
-          messageRender={!isUser ? renderMarkdown : undefined}
+          messageRender={!isUser ? (msg.streaming ? renderStreamingText : renderMarkdown) : undefined}
           className="fdp-message-bubble"
         />
       </div>
     </div>
   );
-}
+});
 
 const renderMarkdown = (content: string) => (
-  <ReactMarkdown
-    remarkPlugins={[remarkGfm]}
-    components={{
-      table: ({ children }) => (
-        <div style={{ overflowX: "auto" }}>
-          <table className="fdp-tool-result-table">{children}</table>
-        </div>
-      ),
-    }}
-  >
-    {content}
-  </ReactMarkdown>
+  <Suspense fallback={<div className="fdp-streaming-text">{content}</div>}>
+    <MarkdownContent content={content} />
+  </Suspense>
+);
+
+const renderStreamingText = (content: string) => (
+  <div className="fdp-streaming-text">{content}</div>
 );

@@ -92,8 +92,10 @@ function stripThinkingPlaceholders(messages: ChatMessage[]): ChatMessage[] | nul
 }
 
 export function useChatStream() {
-  const chat = useChatStore();
-  const sessions = useSessionStore();
+  // MessageInput only needs the primitive streaming flag. Reading the whole
+  // stores here made the composer re-render for every token and every session
+  // list mutation; actions are fetched imperatively inside send() instead.
+  const streaming = useChatStore((state) => state.streaming);
 
   // Holds the in-flight AbortController so the user can cancel the
   // current stream (the AntD X <Sender> "stop" button calls
@@ -104,6 +106,8 @@ export function useChatStream() {
 
   const send = useCallback(
     async (query: string) => {
+      const chat = useChatStore.getState();
+      const sessions = useSessionStore.getState();
       if (!query.trim() || chat.streaming) return;
       chat.appendUser(query);
       chat.appendAssistant();
@@ -111,6 +115,34 @@ export function useChatStream() {
       const controller = new AbortController();
       abortRef.current = controller;
       runIdRef.current = null;
+
+      // SSE providers may emit dozens of tiny token events in a single frame.
+      // Buffer them so Zustand/React receive at most one answer update per
+      // animation frame instead of re-rendering the whole chat per token.
+      let tokenBuffer = "";
+      let tokenFrame: number | null = null;
+      const commitBufferedTokens = () => {
+        if (tokenFrame !== null) {
+          window.cancelAnimationFrame(tokenFrame);
+          tokenFrame = null;
+        }
+        if (!tokenBuffer) return;
+        const chunk = tokenBuffer;
+        tokenBuffer = "";
+        useChatStore.getState().appendToken(chunk);
+      };
+      const queueToken = (text: string) => {
+        if (!text) return;
+        tokenBuffer += text;
+        if (tokenFrame !== null) return;
+        tokenFrame = window.requestAnimationFrame(() => {
+          tokenFrame = null;
+          if (!tokenBuffer) return;
+          const chunk = tokenBuffer;
+          tokenBuffer = "";
+          useChatStore.getState().appendToken(chunk);
+        });
+      };
 
       const url = `${API_BASE}/api/agent/chat/stream`;
       let newSessionId: string | null = null;
@@ -263,7 +295,7 @@ export function useChatStream() {
               const cleaned = stripThinkingPlaceholders(s.messages);
               return cleaned ? { messages: cleaned } : s;
             });
-            chat.appendToken(ev.data.text ?? "");
+            queueToken(ev.data.text ?? "");
           } else if (ev.event === "think_chunk") {
             // Stream the thinking into a single live-updated step so the
             // user sees the reasoning appear in real time. We tag the step
@@ -372,6 +404,7 @@ export function useChatStream() {
               return cleaned ? { messages: cleaned } : s;
             });
           } else if (ev.event === "message_final") {
+            commitBufferedTokens();
             // The synthesizer's payload carries the final answer text.
             // We use it as a SAFETY NET: if the LLM dumped everything
             // into the think block and never produced token_delta events,
@@ -408,9 +441,11 @@ export function useChatStream() {
             }
             chat.finalizeAssistant();
           } else if (ev.event === "error") {
-            chat.appendToken(`\n\n⚠️ ${ev.data.message ?? "出错了"}`);
+            commitBufferedTokens();
+            useChatStore.getState().appendToken(`\n\n⚠️ ${ev.data.message ?? "出错了"}`);
             chat.finalizeAssistant();
           } else if (ev.event === "done") {
+            commitBufferedTokens();
             // Defense in depth: scrub any "💭 思考中…" placeholders
             // that survived the synthesizer's normal flow. Without
             // this, if a heartbeat added a placeholder AFTER the last
@@ -423,6 +458,7 @@ export function useChatStream() {
             chat.finalizeAssistant();
           }
         }
+        commitBufferedTokens();
         // Some proxies terminate a chunked response as a clean EOF instead
         // of surfacing a fetch error. A remaining run id means no terminal
         // run_status arrived, so recover exactly as we do for a thrown reset.
@@ -431,6 +467,7 @@ export function useChatStream() {
           await recoverActiveRun(unfinishedRunId);
         }
       } catch (err) {
+        commitBufferedTokens();
         const e = err as Error & { name?: string };
         if (e.name === "AbortError" || controller.signal.aborted) {
           // User pressed stop. Don't show the "network error" message;
@@ -462,16 +499,17 @@ export function useChatStream() {
             const friendly = /network|fetch|aborted|timeout/i.test(msg)
               ? "网络连接中断（HF Space 代理超时）。请稍后重试。"
               : `⚠️ ${msg}`;
-            chat.appendToken(`\n\n${friendly}`);
-            chat.finalizeAssistant();
+            useChatStore.getState().appendToken(`\n\n${friendly}`);
+            useChatStore.getState().finalizeAssistant();
           }
         }
       } finally {
+        commitBufferedTokens();
         abortRef.current = null;
         runIdRef.current = null;
       }
     },
-    [chat, sessions]
+    []
   );
 
   const stop = useCallback(() => {
@@ -507,5 +545,5 @@ export function useChatStream() {
     };
   }, [stop]);
 
-  return { send, stop, streaming: chat.streaming };
+  return { send, stop, streaming };
 }

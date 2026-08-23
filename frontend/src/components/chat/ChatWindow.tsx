@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import {
   ArrowRightOutlined,
   FundOutlined,
@@ -9,7 +9,10 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useChatStore } from "../../stores/chatStore";
-import { MessageBubble } from "./MessageBubble";
+
+const MessageBubble = lazy(() =>
+  import("./MessageBubble").then((module) => ({ default: module.MessageBubble })),
+);
 
 const promptGroups = [
   {
@@ -98,9 +101,11 @@ export function ChatWindow() {
     <div ref={containerRef} className="fdp-chat-area">
       <div className="fdp-chat-thread">
         <div className="fdp-thread-date"><span>当前分析</span></div>
-        {messages.map((m) => (
-          <MessageBubble key={m.id} msg={m} />
-        ))}
+        <Suspense fallback={<div className="fdp-thread-loading">正在加载分析记录…</div>}>
+          {messages.map((m) => (
+            <MessageBubble key={m.id} msg={m} />
+          ))}
+        </Suspense>
       </div>
     </div>
   );

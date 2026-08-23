@@ -1,4 +1,4 @@
-import { Button, List, Popconfirm, Input, Tooltip, App, Modal, Tag } from "antd";
+import { Button, List, Popconfirm, Input, Tooltip, App } from "antd";
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -11,12 +11,17 @@ import {
   ClockCircleOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useChatStore } from "../../stores/chatStore";
 import { useSkillStore } from "../../stores/skillStore";
 import { api } from "../../lib/api";
-import type { MemoryItem } from "../../lib/api";
+
+const MemoryManagerModal = lazy(() =>
+  import("./MemoryManagerModal").then((module) => ({
+    default: module.MemoryManagerModal,
+  })),
+);
 
 interface SidebarProps {
   mobileOpen?: boolean;
@@ -61,34 +66,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [memories, setMemories] = useState<MemoryItem[]>([]);
-  const [memoryLoading, setMemoryLoading] = useState(false);
-
-  const openMemories = async () => {
-    setMemoryOpen(true);
-    setMemoryLoading(true);
-    try {
-      const result = await api.listMemories();
-      setMemories(result.memories);
-    } catch (e) {
-      message.error("加载记忆失败：" + (e as Error).message);
-    } finally {
-      setMemoryLoading(false);
-    }
-  };
-
-  const removeMemory = async (id: string) => {
-    await api.deleteMemory(id);
-    setMemories((items) => items.filter((item) => item.id !== id));
-  };
-
-  const clearMemories = async () => {
-    const result = await api.clearMemories();
-    setMemories([]);
-    message.success(
-      `已清除 ${result.deleted.long_term} 条长期记忆和 ${result.deleted.short_term} 条短期摘要`,
-    );
-  };
+  const [memoryManagerMounted, setMemoryManagerMounted] = useState(false);
 
   useEffect(() => {
     // Race guard: if Sidebar unmounts (e.g. test cleanup, future
@@ -285,7 +263,15 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
       </div>
       <div className="fdp-sidebar-footer">
         <div className="fdp-sidebar-footer-label">工作区</div>
-        <Button block type="text" icon={<BulbOutlined />} onClick={openMemories}>
+        <Button
+          block
+          type="text"
+          icon={<BulbOutlined />}
+          onClick={() => {
+            setMemoryManagerMounted(true);
+            setMemoryOpen(true);
+          }}
+        >
           记忆管理
         </Button>
         <Button
@@ -323,44 +309,11 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           <SettingOutlined />
         </div>
       </div>
-      <Modal
-        title="记忆管理"
-        open={memoryOpen}
-        onCancel={() => setMemoryOpen(false)}
-        footer={
-          <Popconfirm
-            title="清除全部记忆？"
-            description="将删除长期记忆和所有会话摘要，不会删除聊天记录。"
-            onConfirm={clearMemories}
-            okButtonProps={{ danger: true }}
-          >
-            <Button danger>清除全部记忆</Button>
-          </Popconfirm>
-        }
-      >
-        <div style={{ color: "#777", fontSize: 12, marginBottom: 12 }}>
-          记忆仅绑定当前浏览器的匿名身份；清除浏览器数据或更换设备后无法找回。
-        </div>
-        <List
-          loading={memoryLoading}
-          dataSource={memories}
-          locale={{ emptyText: "暂无长期记忆" }}
-          renderItem={(item) => (
-            <List.Item
-              actions={[
-                <Button key="delete" type="link" danger onClick={() => removeMemory(item.id)}>
-                  删除
-                </Button>,
-              ]}
-            >
-              <List.Item.Meta
-                title={<Tag>{item.category}</Tag>}
-                description={item.content}
-              />
-            </List.Item>
-          )}
-        />
-      </Modal>
+      {memoryManagerMounted && (
+        <Suspense fallback={null}>
+          <MemoryManagerModal open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+        </Suspense>
+      )}
     </aside>
   );
 }

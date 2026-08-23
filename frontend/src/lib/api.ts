@@ -43,7 +43,7 @@ async function del<T>(path: string): Promise<T> {
 
 export const api = {
   health: () => http<{ ok: boolean; tools: { count: number; names: string[] } }>("/api/health"),
-  listSkills: () => http<{ skills: SkillItem[] }>("/api/skills"),
+  listSkills: (signal?: AbortSignal) => http<{ skills: SkillItem[] }>("/api/skills", { signal }),
   toggleSkill: (name: string, enabled: boolean) =>
     http<{ name: string; enabled: boolean }>(`/api/skills/${name}`, {
       method: "PATCH",
@@ -79,7 +79,7 @@ export const api = {
     http<{ id: string; deleted: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   deleteAllSessions: () =>
     http<{ deleted: number }>("/api/sessions", { method: "DELETE" }),
-  listMemories: () => http<MemoryListResponse>("/api/memories"),
+  listMemories: (signal?: AbortSignal) => http<MemoryListResponse>("/api/memories", { signal }),
   deleteMemory: (id: string) =>
     http<{ id: string; deleted: boolean }>(`/api/memories/${id}`, { method: "DELETE" }),
   clearMemories: () =>

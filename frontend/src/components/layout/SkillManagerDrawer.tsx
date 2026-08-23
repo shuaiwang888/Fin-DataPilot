@@ -12,7 +12,7 @@ import {
   message,
 } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSkillStore } from "../../stores/skillStore";
 import { api } from "../../lib/api";
 import type { SkillItem } from "../../lib/types";
@@ -28,10 +28,6 @@ export function SkillManagerDrawer() {
   const [debugResult, setDebugResult] = useState<Record<string, unknown>>({});
   const [uploading, setUploading] = useState(false);
   const [msg, ctx] = message.useMessage();
-
-  useEffect(() => {
-    api.listSkills().then((r) => skills.setSkills(r.skills)).catch(() => {});
-  }, []);
 
   const handleToggle = async (s: SkillItem, enabled: boolean) => {
     try {

@@ -134,6 +134,7 @@ button, input, textarea { font: inherit; }
 /* Conversation */
 .fdp-chat-area { flex: 1; min-height: 0; overflow-y: auto; padding: 30px clamp(24px, 5vw, 74px); scroll-behavior: smooth; }
 .fdp-chat-thread { width: min(920px, 100%); margin: 0 auto; }
+.fdp-thread-loading { padding: 30px; text-align: center; color: #8b9893; font-size: 12px; }
 .fdp-thread-date { display: flex; align-items: center; gap: 12px; margin-bottom: 23px; color: #9aa6a1; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
 .fdp-thread-date::before, .fdp-thread-date::after { content: ""; height: 1px; flex: 1; background: #e0e7e4; }
 .fdp-message-row { margin: 0 0 28px; }
@@ -152,6 +153,7 @@ button, input, textarea { font: inherit; }
 .fdp-message-row.is-user .fdp-message-bubble .ant-bubble-content { color: #fff; background: linear-gradient(135deg, #1d6d5d, #155448); border-color: transparent; border-radius: 14px 4px 14px 14px; box-shadow: 0 8px 20px rgba(20,85,71,.14); }
 .fdp-message-bubble p { margin: 0 0 10px; }
 .fdp-message-bubble p:last-child { margin-bottom: 0; }
+.fdp-streaming-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .fdp-message-bubble h1, .fdp-message-bubble h2, .fdp-message-bubble h3 { color: #183b32; font-family: "Manrope", sans-serif; }
 .fdp-message-bubble code { padding: 2px 5px; border-radius: 5px; background: #edf3f0; color: #176b5b; }
 .fdp-message-bubble pre { overflow: auto; padding: 14px; border-radius: 10px; background: #112d27; color: #e7f1ee; }
