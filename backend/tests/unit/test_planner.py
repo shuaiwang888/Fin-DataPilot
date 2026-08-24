@@ -93,6 +93,20 @@ def test_normalize_plan_keeps_or_query_as_single_followup() -> None:
     assert out == plan
 
 
+def test_normalize_plan_prunes_unrequested_research_for_limit_up_list() -> None:
+    plan = [
+        {"goal": "列出涨停股", "target_skill": "financial-query", "args": {}},
+        {"goal": "补公告", "target_skill": "announcement-search", "args": {}},
+        {"goal": "补新闻", "target_skill": "news-search", "args": {}},
+        {"goal": "补研报", "target_skill": "report-search", "args": {}},
+        {"goal": "联网补充", "target_skill": "anysearch", "args": {}},
+    ]
+
+    out = _normalize_plan_for_query("列举全部涨停股票", plan)
+
+    assert [step["target_skill"] for step in out] == ["financial-query"]
+
+
 # --- planner_node: end-to-end with stubbed LLM ----------------------
 
 
@@ -122,6 +136,35 @@ async def test_planner_produces_plan_from_llm() -> None:
     assert out["plan"][0]["target_skill"] == "financial-query"
     assert out["pending_step_index"] == 0
     assert llm.ainvoke.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_planner_uses_latest_turn_and_prunes_hallucinated_followups() -> None:
+    state = {
+        "user_query": "列举全部涨停股票",
+        "history": [
+            {"role": "user", "content": "今日涨停的股票"},
+            {"role": "assistant", "content": "你想查看哪些信息？"},
+        ],
+        "tool_calls": [],
+        "plan": [],
+        "pending_step_index": 0,
+    }
+    fake_plan = {
+        "plan": [
+            {"goal": "查列表", "target_skill": "financial-query", "args": {"query": "列举全部涨停股票"}},
+            {"goal": "查公告", "target_skill": "announcement-search", "args": {"query": "涨停股公告"}},
+            {"goal": "查新闻", "target_skill": "news-search", "args": {"query": "涨停股新闻"}},
+            {"goal": "查研报", "target_skill": "report-search", "args": {"query": "涨停股研报"}},
+        ]
+    }
+    with patch("app.agent.nodes.planner.build_chat_model") as mock_build:
+        llm = AsyncMock()
+        llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": json.dumps(fake_plan)})())
+        mock_build.return_value = llm
+        out = await planner_node(state)  # type: ignore[arg-type]
+
+    assert [step["target_skill"] for step in out["plan"]] == ["financial-query"]
 
 
 @pytest.mark.asyncio

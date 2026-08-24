@@ -21,6 +21,14 @@ def test_cors_origins_parsed() -> None:
     assert len(s.cors_origins_list) >= 1
 
 
+def test_agent_skill_call_budget_cannot_exceed_eight(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_MAX_SKILL_CALLS", "48")
+
+    settings = Settings()
+
+    assert settings.agent_max_skill_calls == 8
+
+
 def test_database_url_is_sqlite() -> None:
     s = get_settings()
     assert "sqlite" in s.database_url

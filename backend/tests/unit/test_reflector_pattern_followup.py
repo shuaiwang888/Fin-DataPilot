@@ -211,7 +211,7 @@ def test_missing_followup_does_not_treat_admin_as_stock() -> None:
     assert args["query"] == "华勤技术的研报"
 
 
-def test_analysis_query_after_financial_result_requests_more_financial_evidence() -> None:
+def test_analysis_query_does_not_force_all_vertical_skills() -> None:
     calls = [{
         "name": "financial-query",
         "args": {"query": "宁德时代近期涨跌幅和资金"},
@@ -224,23 +224,9 @@ def test_analysis_query_after_financial_result_requests_more_financial_evidence(
         user_query="宁德时代为什么跌",
     )
 
-    assert skill == "announcement-search"
-    assert args == {"query": "宁德时代的公告", "limit": "10", "days": "30"}
-    assert row["股票简称"] == "宁德时代"
-
-    calls.append({
-        "name": "announcement-search",
-        "args": {"query": "宁德时代的公告"},
-        "ok": True,
-        "result": {"data": {"announcements": [{"title": "公告A"}]}},
-    })
-    skill, args, _ = _infer_missing_requested_followup(
-        calls=calls,
-        user_query="宁德时代为什么跌",
-    )
-
-    assert skill == "news-search"
-    assert args == {"query": "宁德时代的新闻", "limit": "10", "days": "30"}
+    assert skill is None
+    assert args is None
+    assert row is None
 
 
 # --- end-to-end via reflector_node ----------------------------------
@@ -370,3 +356,45 @@ async def test_reflector_node_still_sufficient_for_simple_list_request() -> None
             "report-search",
             "anysearch",
         )
+
+
+@pytest.mark.asyncio
+async def test_limit_up_list_stops_without_unrequested_vertical_skills() -> None:
+    """Regression for the two-turn 'today limit-ups' → 'list all' flow."""
+    state = {
+        "user_query": "列举全部涨停股票",
+        "history": [
+            {"role": "user", "content": "今日涨停的股票"},
+            {"role": "assistant", "content": "请问需要哪些维度？"},
+        ],
+        "tool_calls": [
+            {
+                "name": "financial-query",
+                "args": {"query": "列举全部涨停股票"},
+                "ok": True,
+                "result": {
+                    "data": {"datas": [_row("301152.SZ", "天力锂能", 88.0)]},
+                    "ok": True,
+                },
+                "error": None,
+                "trace_id": "t-list",
+            }
+        ],
+        # Simulate an over-planned LLM output. The reflector must stop before
+        # any of these unrelated steps can reach the router.
+        "plan": [
+            {"goal": "查列表", "target_skill": "financial-query", "args": {}},
+            {"goal": "查公告", "target_skill": "announcement-search", "args": {}},
+            {"goal": "查新闻", "target_skill": "news-search", "args": {}},
+            {"goal": "查研报", "target_skill": "report-search", "args": {}},
+        ],
+        "pending_step_index": 1,
+        "rounds_used": 0,
+    }
+    with patch("app.agent.nodes.reflector.build_chat_model") as mock_build:
+        out = await reflector_node(state)  # type: ignore[arg-type]
+
+    mock_build.assert_not_called()
+    assert out["reflection_verdict"] == "sufficient"
+    assert "无需扩展" in out["reflection"]
+    assert "next_skill_hint" not in out

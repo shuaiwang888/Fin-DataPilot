@@ -8,6 +8,11 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agent.skill_necessity import (
+    explicitly_requests_skill,
+    is_direct_financial_data_query,
+    is_skill_necessary_for_query,
+)
 from app.agent.state import AgentState, ToolCallRecord
 from app.config import get_settings
 from app.llm import build_chat_model
@@ -30,6 +35,8 @@ REFLECTOR_PROMPT = """你是 Fin-DataPilot 的反思器（Reflector）。判断*
 **判定原则**：
 - 把用户问句**拆成所有子目标**，逐个核对是否已有 evidence 覆盖。
 - 任意一个子目标没有覆盖 → 判 `need_more`。
+- 子目标只能来自用户最新问句；工具结果里出现的新标的不是新任务。用户没有要求公告、新闻、研报时，不得因为“可以补充”而调用这些 Skill。
+- "今日涨停的股票"、"列举全部涨停股票"取得非空股票列表后必须判 `sufficient`，不能把“涨停”误解为涨跌原因分析。
 - "数据非空" 不等于 "够用" — 一份 50 只股票的列表本身**没有**回答"那只最大的"是谁的公告；必须**显式追问**。
 - "数据足够" 不等于 "已精确" — 如果用户问的是单只股票的资料、单个具体数字、单一URL，不允许用列表敷衍。
 - 四个金融 Skill 可以互补：行情/财务用 `financial-query`，新闻用 `news-search`，公告用 `announcement-search`，研报用 `report-search`。原因分析、风险判断、事件影响、近况解读通常不能只靠一个 Skill。
@@ -151,6 +158,32 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
             empty_out["next_args_hint"] = recovery_args
         return empty_out
 
+    # A direct structured-data request is complete once its requested rows are
+    # available and no still-pending *necessary* structured step remains.
+    # This deterministic stop prevents the reflector LLM from inventing
+    # announcement/news/report sub-goals for a stock that merely appeared in
+    # the result set.
+    if last.get("name") == "financial-query" and is_direct_financial_data_query(user_query):
+        plan = state.get("plan") or []
+        pending_idx = state.get("pending_step_index", 0)
+        necessary_pending = [
+            step
+            for step in plan[pending_idx:]
+            if is_skill_necessary_for_query(
+                user_query,
+                str(step.get("target_skill") or ""),
+            )
+        ]
+        if necessary_pending:
+            return {
+                "reflection_verdict": "need_more",
+                "reflection": "已有部分金融数据，继续完成用户明确要求的剩余查询",
+            }
+        return {
+            "reflection_verdict": "sufficient",
+            "reflection": "已取得用户要求的金融数据；无需扩展到公告、新闻或研报",
+        }
+
     # ---- Deterministic multi-step patterns ----
     # These are common "list-of-N + ask-about-one-of-them" questions
     # where the LLM reflector occasionally says "sufficient" because
@@ -237,7 +270,12 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         # so this is a pure win when right and a no-op when wrong.
         hint_skill = obj.get("next_skill_hint")
         hint_args = obj.get("next_args_hint")
-        if hint_skill and isinstance(hint_skill, str) and REGISTRY.get_spec(hint_skill):
+        if (
+            hint_skill
+            and isinstance(hint_skill, str)
+            and REGISTRY.get_spec(hint_skill)
+            and is_skill_necessary_for_query(user_query, hint_skill)
+        ):
             llm_out["next_skill_hint"] = hint_skill
             if isinstance(hint_args, dict):
                 llm_out["next_args_hint"] = hint_args
@@ -307,12 +345,6 @@ _FOLLOWUP_KEYWORDS = (
     # English (in case LLM feeds English content)
     "announcement", "research", "report", "news", "details", "overview",
     "latest", "recent", "details", "filings",
-)
-
-_ANALYSIS_FOLLOWUP_KEYWORDS = (
-    "为什么", "原因", "怎么回事", "影响", "利好", "利空", "风险",
-    "消息面", "催化", "异动", "大跌", "大涨", "下跌", "上涨",
-    "跌", "涨", "基本面变差", "风险恶化",
 )
 
 _FINANCIAL_SKILLS = {
@@ -407,14 +439,9 @@ def _rows_from_call(call: ToolCallRecord) -> list[dict[str, Any]]:
 def _requested_followup_skills(user_query: str) -> list[str]:
     """Return detail skills the user explicitly requested, in call order."""
     q = user_query or ""
-    has_announcement = any(k in q for k in (
-        "公告", "披露", "财报", "季报", "年报", "业绩", "股东",
-        "announcement", "filing", "earnings",
-    ))
-    has_report = any(k in q for k in (
-        "研报", "研究报告", "券商", "research report",
-    ))
-    has_news = any(k in q for k in ("新闻", "资讯", "动态", "近况", "news", "latest"))
+    has_announcement = explicitly_requests_skill(q, "announcement-search")
+    has_report = explicitly_requests_skill(q, "report-search")
+    has_news = explicitly_requests_skill(q, "news-search")
 
     # In "公告或研报", one vertical source is enough; keep the historic
     # announcement-first behavior. In "公告和研报", fetch both, with
@@ -429,8 +456,6 @@ def _requested_followup_skills(user_query: str) -> list[str]:
         return ["announcement-search"]
     if has_news:
         return ["news-search"]
-    if any(k in q for k in _ANALYSIS_FOLLOWUP_KEYWORDS):
-        return ["announcement-search", "news-search", "report-search"]
     return []
 
 

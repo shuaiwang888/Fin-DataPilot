@@ -10,6 +10,7 @@ from typing import Any, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.prompts.system import render_system_prompt
+from app.agent.skill_necessity import is_skill_necessary_for_query
 from app.agent.state import AgentState, ToolCallRecord
 from app.config import get_settings
 from app.llm import build_chat_model
@@ -175,6 +176,7 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         and isinstance(hint_skill, str)
         and REGISTRY.get_spec(hint_skill)
         and REGISTRY.is_enabled(hint_skill)
+        and is_skill_necessary_for_query(state.get("user_query", ""), hint_skill)
         and isinstance(hint_args, dict)
     ):
         return {
@@ -212,6 +214,16 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
         if not REGISTRY.get_spec(skill) or not REGISTRY.is_enabled(skill):
             logger.warning(
                 "router: plan step %d references invalid skill %r, skipping", pending_idx, skill
+            )
+            return {
+                "pending_step_index": pending_idx + 1,
+                "router_action": "continue",
+            }
+        if not is_skill_necessary_for_query(state.get("user_query", ""), skill):
+            logger.info(
+                "router: skipping unnecessary plan step %d for latest query: %s",
+                pending_idx,
+                skill,
             )
             return {
                 "pending_step_index": pending_idx + 1,
@@ -293,6 +305,12 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
             "reflection_verdict": "failed",
             "error": f"LLM requested disabled skill: {name}",
             "final_answer": f"抱歉，工具 `{name}` 当前已被禁用。请在前端 Skill 管理中启用后再试。",
+            "router_action": "finish",
+        }
+    if not is_skill_necessary_for_query(state.get("user_query", ""), name):
+        logger.info("router: rejected unnecessary LLM-selected skill %s", name)
+        return {
+            "reflection_verdict": "sufficient",
             "router_action": "finish",
         }
 

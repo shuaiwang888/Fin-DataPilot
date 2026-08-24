@@ -139,6 +139,33 @@ async def test_router_consumes_hint_without_calling_llm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_rejects_unnecessary_vertical_hint_for_simple_list() -> None:
+    state = _state_with_calls(
+        calls=[{
+            "name": "financial-query", "args": {"query": "列举全部涨停股票"}, "ok": True,
+            "result": {"data": {"datas": [_stock_row("301152.SZ", "天力锂能", 88.0)]}},
+            "error": None, "trace_id": "t",
+        }],
+        user_query="列举全部涨停股票",
+        next_skill_hint="announcement-search",
+        next_args_hint={"query": "天力锂能公告"},
+    )
+    fake_response = json.dumps({
+        "name": "news-search",
+        "args": {"query": "天力锂能新闻"},
+    })
+    with patch("app.agent.nodes.skill_router.build_chat_model") as mock_build:
+        llm = AsyncMock()
+        llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": fake_response})())
+        mock_build.return_value = llm
+        out = await skill_router_node(state)  # type: ignore[arg-type]
+
+    assert out["router_action"] == "finish"
+    assert out["reflection_verdict"] == "sufficient"
+    assert len(out.get("tool_calls", state["tool_calls"])) == 1
+
+
+@pytest.mark.asyncio
 async def test_router_falls_back_to_llm_when_no_hint() -> None:
     """No hint → router must consult the LLM as before."""
     fake_response = json.dumps({

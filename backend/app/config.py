@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     # ===== Agent =====
     # Hard per-user-question cap. Every dispatch counts, including successful
     # calls, so a re-planning loop cannot make unbounded external requests.
-    agent_max_skill_calls: int = 48
+    agent_max_skill_calls: int = 8
     # Replanning is deliberately separate from dispatches: each cycle can add
     # evidence-aware sub-tasks, while the dispatch ceiling remains the final
     # protection against unbounded external requests.
@@ -131,6 +131,12 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_cors(cls, v: str) -> str:
         return v.strip()
+
+    @field_validator("agent_max_skill_calls")
+    @classmethod
+    def _cap_agent_skill_calls(cls, v: int) -> int:
+        """Keep the per-question dispatch budget within the product contract."""
+        return min(max(v, 1), 8)
 
     @property
     def cors_origins_list(self) -> list[str]:

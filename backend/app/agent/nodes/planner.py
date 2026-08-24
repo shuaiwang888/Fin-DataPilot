@@ -27,6 +27,10 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agent.skill_necessity import (
+    is_direct_financial_data_query,
+    is_skill_necessary_for_query,
+)
 from app.agent.state import AgentState
 from app.config import get_settings
 from app.llm import build_chat_model
@@ -53,6 +57,8 @@ PLANNER_PROMPT = """你是 Fin-DataPilot 的规划器（Planner）。基于用�
 # 规则
 1. **简单问题**（"茅台股价"、"今天的新闻"）→ **1 步计划**
 2. **复合问题**（"涨停 + 市值最大 + 公告"、"宁德时代为什么跌 + 上下游"）→ **2-8 步计划**
+   - 是否复合只按用户**明确提出的目标**判断；查询结果里出现某只股票，不代表用户要求继续查它的公告、新闻或研报。
+   - "今日涨停的股票"、"列举全部涨停股票"都只是列表查询，只能规划一次 `financial-query`。
 3. 每一步必须有具体的 `target_skill` + `args`；**不允许**输出"最后总结"或 `target_skill: null`。正文只能由 Synthesizer 在证据充分后生成。
 4. **args 的语义占位（重要）**：当后面步骤要引用前一步的输出时，**必须**用占位符：
    - `<step_0_top_stock>` — 第 0 步结果中按市值最大的那只股票的「名称 + 代码」组合
@@ -71,7 +77,8 @@ PLANNER_PROMPT = """你是 Fin-DataPilot 的规划器（Planner）。基于用�
    - 诊股指标查询：指标不超过 5 个时尽量一步；超过 5 个时按数据族拆成多个独立 financial-query 步骤。
    - 明确标的和指标：保留具体标的、指标及明确时间点/范围。抽象事件时间必须先检索到具体日期；不得自行推断。
    - 未明确标的类型时默认按股票处理。`args.query` 不得包含“资金面”，不得查询天气等非金融指标。
-7. **金融问题可以多 Skill 互补**：四个金融 Skill（financial-query / news-search / announcement-search / report-search）不是互斥关系。解释原因、判断影响、分析风险、查近期近况时，通常要先取结构化数据，再补新闻 / 公告 / 研报。
+7. **每次 Skill 调用必须必要**：只有用户明确要求对应内容，或明确提出原因、影响、风险、投资决策等跨来源分析时，才可规划 news / announcement / report。禁止为了“更完整”擅自扩展任务。
+   - 四个金融 Skill（financial-query / news-search / announcement-search / report-search）可以互补，但不是默认全部调用。解释原因、判断影响、分析风险、查近期近况时，按实际子目标选择必要来源。
    - 对"值得买 / 能不能买 / 下周是否买 / 推荐哪些"这类决策问题，不能只查一份涨幅或股票列表就结束：至少拆出候选标的、近期事件/新闻、风险或基本面证据等子任务；最终结论必须保留条件和不确定性。
 8. **anysearch 是低优先级兜底，不是禁用**：金融 Skill 优先；如果金融 Skill 返回为空、字段不全、没有覆盖用户问句，或需要公开网页/实时事实核查，可以在后续步骤使用 anysearch。
 9. 计划必须先列出可核验的数据/检索步骤，不能因为常识或模型已有知识直接作答。每一步写清 `success_criteria`；同时列出全题 `sufficiency_criteria`。
@@ -205,6 +212,24 @@ def _normalize_plan_for_query(user_query: str, plan: list[dict[str, Any]]) -> li
     that asks for both announcements and reports. For this high-traffic
     pattern, make the two dependent lookups explicit and deterministic.
     """
+    if not plan:
+        return plan
+
+    # Enforce necessity independently from the planner LLM. A simple stock
+    # list must not fan out into news/announcement/report searches merely
+    # because the first result exposes a concrete ticker.
+    has_financial_step = any(step.get("target_skill") == "financial-query" for step in plan)
+    plan = [
+        step
+        for step in plan
+        if is_skill_necessary_for_query(user_query, str(step.get("target_skill") or ""))
+        and not (
+            step.get("target_skill") == "anysearch"
+            and has_financial_step
+            and is_direct_financial_data_query(user_query)
+        )
+    ]
+
     if not plan or not _requests_both_announcement_and_report(user_query):
         return plan
 
@@ -353,6 +378,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         clean_plan = _fallback_research_plan(user_query)
     else:
         clean_plan = _normalize_plan_for_query(user_query, clean_plan)
+        if not clean_plan:
+            logger.warning("planner: every planned step was unnecessary, using research fallback")
+            clean_plan = _fallback_research_plan(user_query)
 
     logger.info(
         "planner: produced %d-step plan: %s",
