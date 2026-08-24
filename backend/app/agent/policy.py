@@ -51,6 +51,15 @@ def assess_tool_call(name: str, args: dict[str, Any]) -> PolicyDecision:
     if name != "financial-query":
         return PolicyDecision(allowed=True)
     query = str(args.get("query", ""))
+    if "资金面" in query:
+        return PolicyDecision(
+            allowed=False,
+            code="FINANCIAL_QUERY_FORBIDDEN_TERM",
+            message=(
+                "financial-query 的输入不得包含“资金面”。"
+                "请改用用户明确要求的具体指标，例如主力资金净流入、北向资金或融资融券。"
+            ),
+        )
     days = _continuous_window_days(query)
     if days is not None and days > 30:
         return PolicyDecision(

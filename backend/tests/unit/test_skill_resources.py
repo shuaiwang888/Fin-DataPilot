@@ -9,7 +9,10 @@ def test_loads_checked_in_skill_instructions() -> None:
     resources = load_skill_resources(["financial-query"], max_chars=2_000)
 
     assert "financial-query" in resources
-    assert resources["financial-query"]["instruction"]
+    instruction = resources["financial-query"]["instruction"]
+    assert instruction
+    assert "全部条件放进同一个 query" in instruction
+    assert "本 skill 不做" not in instruction
 
 
 def test_refuses_path_traversal_and_unknown_directories() -> None:

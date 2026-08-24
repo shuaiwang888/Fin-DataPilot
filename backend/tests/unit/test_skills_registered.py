@@ -18,6 +18,15 @@ def test_financial_query_uses_astock_selector_platform_name() -> None:
     assert mapping["financial-query"] == "hithink-astock-selector"
 
 
+def test_financial_query_description_exposes_calling_rules() -> None:
+    spec = REGISTRY.get_spec("financial-query")
+    assert spec is not None
+    assert "未明确标的类型时默认按股票处理" in spec.description
+    assert "所有筛选条件必须同时放在同一个" in spec.description
+    assert "指标超过 5 个时拆成多个" in spec.description
+    assert "不得包含“资金面”" in spec.description
+
+
 def test_skill_specs_have_descriptions() -> None:
     for spec in REGISTRY.list_specs():
         assert spec.description.strip(), f"{spec.name} has empty description"

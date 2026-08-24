@@ -28,6 +28,19 @@ SKILL_PLATFORM_NAME = "hithink-astock-selector"
 SKILL_VERSION = "2.0.0"
 DEFAULT_API_URL = "https://openapi.iwencai.com/v1/query2data"
 
+FINANCIAL_QUERY_DESCRIPTION = (
+    "金融数据查询工具。可获取宏观、财务、行情、事件、交易、个人账户、自选股、个股看点、"
+    "股票概念、技术形态、交易日开盘等数据，覆盖股票、美股、港股、基金、指数、宏观、可转债、"
+    "期货等领域；未明确标的类型时默认按股票处理。调用分三类："
+    "1）单条件或多条件筛选：query 必须保留用户原始问句，所有筛选条件必须同时放在同一个"
+    "financial-query 输入中，禁止拆散、删减或自行改写条件；"
+    "2）诊股指标查询：指标超过 5 个时拆成多个独立 financial-query 调用，可并行取数；"
+    "3）明确标的和指标：查询该标的在连续时段、固定时段或指定时间点的数据。"
+    "不支持需要先推断具体日期的抽象时间（应先搜索得到明确时间点）、复杂逻辑推断、天气等非金融指标。"
+    "工具 query 不得包含“资金面”；时间必须是具体、明确的时间点或范围。主体、指标或标的过多时可按"
+    "独立取数目标拆分以提高成功率。结果受上下文限制，只展示部分数据。"
+)
+
 
 async def financial_query_handler(
     *,
@@ -114,17 +127,17 @@ async def financial_query_handler(
 FINANCIAL_QUERY_SPEC = ToolSpec(
     name=SKILL_LOCAL_NAME,
     display_name="金融数据查询",
-    description=(
-        "金融结构化数据统一查询入口。基于同花顺问财 OpenAPI，用自然语言查询 A 股 / 港股 / 美股 / 基金 / 期货 / "
-        "ETF / 板块 / 概念 / 指数 / 宏观经济 等全市场结构化数据；支持单标的数据（行情、估值、财务、事件、资金）"
-        "以及排名 / TopN / 筛选 / 选股。"
-    ),
+    description=FINANCIAL_QUERY_DESCRIPTION,
     category="data",
     parameters=[
         ToolParameter(
             name="query",
             type="string",
-            description="自然语言查询问句（中文），例如：'贵州茅台 PE(TTM)'、'银行 股息率前10'、'今日涨停 行业=科技'。",
+            description=(
+                "中文自然语言查询。条件筛选必须原样保留用户全部条件并放入同一个 query；诊股指标超过 5 个时"
+                "拆为多个调用；明确标的查询须包含具体指标和明确时间。不得包含“资金面”，不得查询天气等"
+                "非金融指标。"
+            ),
             min_length=1,
             max_length=500,
         ),
