@@ -34,13 +34,6 @@ jobs:
         working-directory: frontend
         env:
           VITE_API_BASE: ${{ vars.VITE_API_BASE }}
-      # GitHub Pages maps a custom domain to the site root. Keep the former
-      # project-site URL available as well, so existing links to
-      # /Fin-DataPilot/ continue to load the same application.
-      - name: Add legacy project-path entry point
-        run: |
-          mkdir -p frontend/dist/Fin-DataPilot
-          cp frontend/dist/index.html frontend/dist/Fin-DataPilot/index.html
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

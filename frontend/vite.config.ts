@@ -1,10 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// A custom GitHub Pages domain serves this project from its own root, so
-// asset URLs must start at "/" rather than "/Fin-DataPilot/". Keep the
-// environment override for preview deployments that deliberately use a path.
-const base = process.env.VITE_BASE || "/";
+// The custom domain is configured on the account-level GitHub Pages site.
+// Project sites retain their repository path below that domain.
+const base = process.env.VITE_BASE || "/Fin-DataPilot/";
 
 export default defineConfig({
   plugins: [react()],
