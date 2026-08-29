@@ -254,3 +254,79 @@ async def test_graph_executes_report_and_announcement_for_and_query() -> None:
     assert "admin" not in calls[1]["args"]["query"]
     assert "admin" not in calls[2]["args"]["query"]
     router_llm.ainvoke.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_graph_executes_all_capability_steps_for_company_analysis() -> None:
+    """Regression for a real conversation that displayed four planned steps
+    but stopped after financial-query instead of executing every capability."""
+    user_query = "给出对阳光电源的分析，资金面、消息面、走势等等"
+    underplanned = [{
+        "goal": "查资金和走势",
+        "target_skill": "financial-query",
+        "args": {
+            "query": "阳光电源近10日涨跌幅、成交额、换手率、主力资金净流入、均线",
+            "limit": "20",
+        },
+    }]
+    planner_response = json.dumps({"plan": underplanned, "rationale": "underplanned"})
+
+    with patch("app.agent.nodes.skill_router.build_chat_model") as mock_router_build, \
+         patch("app.agent.nodes.reflector.build_chat_model") as mock_refl_build, \
+         patch("app.agent.nodes.planner.build_chat_model") as mock_planner_build, \
+         patch("app.agent.nodes.executor.REGISTRY") as mock_executor_reg:
+        router_llm = AsyncMock()
+        router_llm.ainvoke = AsyncMock()
+        mock_router_build.return_value = router_llm
+        mock_refl_build.return_value = AsyncMock()
+        planner_llm = AsyncMock()
+        planner_llm.ainvoke = AsyncMock(return_value=type(
+            "R", (), {"content": planner_response}
+        )())
+        mock_planner_build.return_value = planner_llm
+
+        async def fake_dispatch(name: str, args: dict[str, Any]):
+            from app.skills.base import ToolResult
+
+            rows_by_skill = {
+                "financial-query": {"datas": [{"股票代码": "300274.SZ", "股票简称": "阳光电源"}]},
+                "news-search": {"articles": [{"title": "阳光电源近期新闻"}]},
+                "announcement-search": {"announcements": [{"title": "阳光电源公告"}]},
+                "report-search": {"reports": [{"title": "阳光电源研报"}]},
+            }
+            return ToolResult(tool=name, ok=True, data=rows_by_skill[name])
+
+        mock_executor_reg.dispatch = fake_dispatch
+        graph = get_graph()
+        init = {
+            "user_query": user_query,
+            "session_id": "s_sungrow",
+            "run_id": "r_sungrow",
+            "history": [],
+            "tool_calls": [],
+            "skill_calls_used": 0,
+            "reflection_verdict": "need_more",
+            "trace_id": "t_sungrow",
+            "plan": [],
+            "planning_cycle": 0,
+            "pending_step_index": 0,
+            "next_skill_hint": None,
+            "next_args_hint": None,
+            "router_action": "continue",
+        }
+        final_state: dict[str, Any] = dict(init)
+        async for ev in graph.astream(init, config={"recursion_limit": 100}):
+            for _, node_out in ev.items():
+                if isinstance(node_out, dict):
+                    final_state.update(node_out)
+
+    assert [call["name"] for call in final_state["tool_calls"]] == [
+        "financial-query",
+        "news-search",
+        "announcement-search",
+        "report-search",
+    ]
+    assert final_state["pending_step_index"] == 4
+    assert final_state["reflection_verdict"] == "sufficient"
+    router_llm.ainvoke.assert_not_called()
+    mock_refl_build.assert_not_called()

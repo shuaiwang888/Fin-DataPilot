@@ -12,6 +12,7 @@ from app.agent.skill_necessity import (
     explicitly_requests_skill,
     is_direct_financial_data_query,
     is_skill_necessary_for_query,
+    required_vertical_skills_for_query,
 )
 from app.agent.state import AgentState, ToolCallRecord
 from app.config import get_settings
@@ -37,6 +38,7 @@ REFLECTOR_PROMPT = """你是 Fin-DataPilot 的反思器（Reflector）。判断*
 - 任意一个子目标没有覆盖 → 判 `need_more`。
 - 子目标只能来自用户最新问句；工具结果里出现的新标的不是新任务。用户没有要求公告、新闻、研报时，不得因为“可以补充”而调用这些 Skill。
 - "今日涨停的股票"、"列举全部涨停股票"取得非空股票列表后必须判 `sufficient`，不能把“涨停”误解为涨跌原因分析。
+- 必须按 Skill 描述核对证据类型：`financial-query` 不能覆盖新闻正文、公司公告或机构研报。用户要求“消息面”时，新闻和公告证据未完成就必须 `need_more`；综合公司分析还要核对研报证据。
 - "数据非空" 不等于 "够用" — 一份 50 只股票的列表本身**没有**回答"那只最大的"是谁的公告；必须**显式追问**。
 - "数据足够" 不等于 "已精确" — 如果用户问的是单只股票的资料、单个具体数字、单一URL，不允许用列表敷衍。
 - 四个金融 Skill 可以互补：行情/财务用 `financial-query`，新闻用 `news-search`，公告用 `announcement-search`，研报用 `report-search`。原因分析、风险判断、事件影响、近况解读通常不能只靠一个 Skill。
@@ -65,6 +67,16 @@ REFLECTOR_PROMPT = """你是 Fin-DataPilot 的反思器（Reflector）。判断*
 async def reflector_node(state: AgentState) -> dict[str, Any]:
     settings = get_settings()
     if not settings.agent_enable_reflection:
+        # Disabling LLM reflection must not disable execution of an explicit
+        # Planner plan.  Previously this returned ``sufficient`` after the
+        # first tool result, so a four-step plan silently stopped at step 1.
+        plan = state.get("plan") or []
+        pending_idx = state.get("pending_step_index", 0)
+        if pending_idx < len(plan):
+            return {
+                "reflection_verdict": "need_more",
+                "reflection": "反思模型已关闭，继续执行 Planner 的剩余步骤",
+            }
         return {"reflection_verdict": "sufficient"}
 
     calls = state.get("tool_calls", [])
@@ -74,8 +86,20 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     last = calls[-1]
     user_query = state.get("user_query", "")
 
-    # Quick heuristic: empty/error → failed
+    # A failed step must not discard independent evidence steps that remain in
+    # an explicit plan. Continue the plan and let synthesis report the failed
+    # dimension honestly; only fail immediately when no planned work remains.
     if not last.get("ok"):
+        plan = state.get("plan") or []
+        pending_idx = state.get("pending_step_index", 0)
+        if pending_idx < len(plan):
+            return {
+                "reflection_verdict": "need_more",
+                "reflection": (
+                    f"本步 {last.get('name') or 'Skill'} 调用失败，"
+                    "继续执行不依赖该结果的剩余计划步骤"
+                ),
+            }
         return {
             "reflection_verdict": "failed",
             "reflection": f"工具调用失败: {last.get('error')}",
@@ -182,6 +206,35 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
         return {
             "reflection_verdict": "sufficient",
             "reflection": "已取得用户要求的金融数据；无需扩展到公告、新闻或研报",
+        }
+
+    # Follow the capability-validated plan before asking the reflector LLM.
+    # Returning no hint is intentional: the router advances the pending plan
+    # index, avoiding duplicate calls caused by a hint that bypasses it.
+    plan = state.get("plan") or []
+    pending_idx = state.get("pending_step_index", 0)
+    necessary_pending = [
+        step
+        for step in plan[pending_idx:]
+        if is_skill_necessary_for_query(user_query, str(step.get("target_skill") or ""))
+    ]
+    if necessary_pending:
+        pending_names = [str(step.get("target_skill") or "") for step in necessary_pending]
+        return {
+            "reflection_verdict": "need_more",
+            "reflection": f"仍需完成用户问题要求的证据类型：{', '.join(pending_names)}",
+        }
+
+    required_vertical = set(required_vertical_skills_for_query(user_query))
+    completed_vertical = {
+        str(call.get("name") or "")
+        for call in calls
+        if call.get("ok") and _rows_from_call(call)
+    }
+    if required_vertical and required_vertical.issubset(completed_vertical):
+        return {
+            "reflection_verdict": "sufficient",
+            "reflection": "用户要求的结构化数据与非结构化金融证据均已覆盖",
         }
 
     # ---- Deterministic multi-step patterns ----

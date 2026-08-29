@@ -30,6 +30,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.agent.skill_necessity import (
     is_direct_financial_data_query,
     is_skill_necessary_for_query,
+    required_vertical_skills_for_query,
 )
 from app.agent.state import AgentState
 from app.config import get_settings
@@ -79,6 +80,8 @@ PLANNER_PROMPT = """你是 Fin-DataPilot 的规划器（Planner）。基于用�
    - 未明确标的类型时默认按股票处理。`args.query` 不得包含“资金面”，不得查询天气等非金融指标。
 7. **每次 Skill 调用必须必要**：只有用户明确要求对应内容，或明确提出原因、影响、风险、投资决策等跨来源分析时，才可规划 news / announcement / report。禁止为了“更完整”擅自扩展任务。
    - 四个金融 Skill（financial-query / news-search / announcement-search / report-search）可以互补，但不是默认全部调用。解释原因、判断影响、分析风险、查近期近况时，按实际子目标选择必要来源。
+   - 必须按可用 Skill 描述做**能力覆盖检查**，不能让一个 Skill 代替它不支持的证据类型：结构化行情/资金/走势用 `financial-query`；消息与媒体资讯用 `news-search`；公司法定披露与事件用 `announcement-search`；机构观点、评级、目标价用 `report-search`。
+   - 用户明确说“消息面”时，至少需要 `news-search` + `announcement-search`；用户要求对单只公司做综合/全面分析或使用“等等”表示开放维度时，再补 `report-search`。`financial-query` 返回了股票名称或行情数据，不代表消息面已经覆盖。
    - 对"值得买 / 能不能买 / 下周是否买 / 推荐哪些"这类决策问题，不能只查一份涨幅或股票列表就结束：至少拆出候选标的、近期事件/新闻、风险或基本面证据等子任务；最终结论必须保留条件和不确定性。
 8. **anysearch 是低优先级兜底，不是禁用**：金融 Skill 优先；如果金融 Skill 返回为空、字段不全、没有覆盖用户问句，或需要公开网页/实时事实核查，可以在后续步骤使用 anysearch。
 9. 计划必须先列出可核验的数据/检索步骤，不能因为常识或模型已有知识直接作答。每一步写清 `success_criteria`；同时列出全题 `sufficiency_criteria`。
@@ -114,11 +117,25 @@ PLANNER_PROMPT = """你是 Fin-DataPilot 的规划器（Planner）。基于用�
     {{"goal": "查宁德时代近期公告事件", "target_skill": "announcement-search",
      "args": {{"query": "宁德时代近期公告", "days": "30", "limit": "10"}}}},
     {{"goal": "查宁德时代近期新闻", "target_skill": "news-search",
-     "args": {{"query": "宁德时代为什么跌 近期新闻", "days": "30", "limit": "10"}}}},
-    {{"goal": "查宁德时代近期研报观点", "target_skill": "report-search",
-     "args": {{"query": "宁德时代近期研报观点", "days": "30", "limit": "10"}}}}
+     "args": {{"query": "宁德时代为什么跌 近期新闻", "days": "30", "limit": "10"}}}}
   ],
-  "rationale": "原因分析需要行情/资金、公告、新闻、研报互相印证"
+  "rationale": "原因分析至少需要行情/资金、公司公告和新闻事件互相印证"
+}}
+
+用户：「给出对阳光电源的分析，资金面、消息面、走势等等」
+输出：
+{{
+  "plan": [
+    {{"goal": "查询阳光电源的行情、资金和技术走势", "target_skill": "financial-query",
+     "args": {{"query": "阳光电源近10日涨跌幅、成交额、换手率、主力资金净流入、北向资金净流入、均线", "limit": "20"}}}},
+    {{"goal": "查询阳光电源近期财经新闻和市场催化", "target_skill": "news-search",
+     "args": {{"query": "阳光电源近期新闻、行业政策与市场催化", "days": "30", "limit": "15"}}}},
+    {{"goal": "查询阳光电源近期公司公告和风险事件", "target_skill": "announcement-search",
+     "args": {{"query": "阳光电源近期公告、业绩披露与风险事件", "days": "90", "limit": "15"}}}},
+    {{"goal": "查询阳光电源近期机构观点", "target_skill": "report-search",
+     "args": {{"query": "阳光电源近期研报、评级与目标价", "days": "90", "limit": "15"}}}}
+  ],
+  "rationale": "四类 Skill 分别覆盖结构化数据、新闻、公告和研报，缺一类都不能声称完成综合分析"
 }}
 
 用户：「今日涨停的股票，哪些值得下周一买」
@@ -206,7 +223,7 @@ def _requests_both_announcement_and_report(user_query: str) -> bool:
 
 
 def _normalize_plan_for_query(user_query: str, plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Patch common LLM under-planning for "top stock + 公告和研报".
+    """Enforce capability coverage and patch common LLM under-planning.
 
     The planner sometimes emits only announcement-search for a question
     that asks for both announcements and reports. For this high-traffic
@@ -230,47 +247,75 @@ def _normalize_plan_for_query(user_query: str, plan: list[dict[str, Any]]) -> li
         )
     ]
 
-    if not plan or not _requests_both_announcement_and_report(user_query):
+    if not plan:
         return plan
 
-    try:
-        financial_idx = next(
-            i for i, step in enumerate(plan)
-            if step.get("target_skill") == "financial-query"
-        )
-    except StopIteration:
-        return plan
+    if _requests_both_announcement_and_report(user_query):
+        try:
+            financial_idx = next(
+                i for i, step in enumerate(plan)
+                if step.get("target_skill") == "financial-query"
+            )
+        except StopIteration:
+            financial_idx = -1
 
-    if financial_idx != 0:
-        # Placeholders are indexed by prior tool-call order. Keep this
-        # normalization conservative unless the financial query is first.
-        return plan
+        if financial_idx == 0:
+            def _followup_step(skill: str) -> dict[str, Any]:
+                if skill == "report-search":
+                    return {
+                        "goal": "查询市值最大涨停股的近期研报",
+                        "target_skill": "report-search",
+                        "args": {"query": "<step_0_top_name>的研报", "days": "30", "limit": "10"},
+                    }
+                return {
+                    "goal": "查询市值最大涨停股的近期公告",
+                    "target_skill": "announcement-search",
+                    "args": {"query": "<step_0_top_name>的公告", "days": "30", "limit": "10"},
+                }
 
-    def _followup_step(skill: str) -> dict[str, Any]:
-        if skill == "report-search":
-            return {
-                "goal": "查询市值最大涨停股的近期研报",
-                "target_skill": "report-search",
-                "args": {"query": "<step_0_top_name>的研报", "days": "30", "limit": "10"},
-            }
-        return {
-            "goal": "查询市值最大涨停股的近期公告",
-            "target_skill": "announcement-search",
-            "args": {"query": "<step_0_top_name>的公告", "days": "30", "limit": "10"},
-        }
+            normalized: list[dict[str, Any]] = []
+            inserted = False
+            for idx, step in enumerate(plan):
+                if step.get("target_skill") in ("report-search", "announcement-search"):
+                    continue
+                normalized.append(step)
+                if idx == financial_idx and not inserted:
+                    normalized.append(_followup_step("report-search"))
+                    normalized.append(_followup_step("announcement-search"))
+                    inserted = True
+            plan = normalized
 
-    normalized: list[dict[str, Any]] = []
-    inserted = False
-    for idx, step in enumerate(plan):
-        if step.get("target_skill") in ("report-search", "announcement-search"):
+    # The LLM may still under-plan even when its prose rules are clear. Append
+    # any evidence family that the latest query explicitly requires, using the
+    # owning Skill's description to build a focused retrieval step.
+    existing = {str(step.get("target_skill") or "") for step in plan}
+    defaults = {
+        "news-search": {
+            "goal": "查询问题所需的近期财经新闻和市场信息",
+            "args": {"query": f"{user_query} 近期财经新闻与市场催化", "days": "30", "limit": "15"},
+        },
+        "announcement-search": {
+            "goal": "查询问题所需的公司公告和法定披露事件",
+            "args": {"query": f"{user_query} 近期公司公告与风险事件", "days": "90", "limit": "15"},
+        },
+        "report-search": {
+            "goal": "查询问题所需的机构研报、评级和目标价",
+            "args": {"query": f"{user_query} 近期研报、评级与目标价", "days": "90", "limit": "15"},
+        },
+    }
+    for skill in required_vertical_skills_for_query(user_query):
+        if skill in existing or not REGISTRY.get_spec(skill) or not REGISTRY.is_enabled(skill):
             continue
-        normalized.append(step)
-        if idx == financial_idx and not inserted:
-            normalized.append(_followup_step("report-search"))
-            normalized.append(_followup_step("announcement-search"))
-            inserted = True
+        default = defaults[skill]
+        plan.append({
+            "goal": default["goal"],
+            "target_skill": skill,
+            "args": default["args"],
+            "success_criteria": "返回该证据类型的可引用结果，或明确的空结果",
+        })
+        existing.add(skill)
 
-    return normalized
+    return plan
 
 
 async def planner_node(state: AgentState) -> dict[str, Any]:
@@ -306,7 +351,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         params = ", ".join(
             f"{p.name}{'' if p.required else '?'}: {p.type}" for p in s.parameters
         )
-        skill_lines.append(f"- {s.name}({params}) — {s.description[:120]}")
+        skill_lines.append(f"- {s.name} [{s.category}]({params}) — {s.description[:600]}")
     skills_text = "\n".join(skill_lines) or "(无可用 Skill)"
 
     # On replan, include prior steps + their results so the LLM can
@@ -339,8 +384,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         # A planner failure must not let the router answer from model memory.
         # Use the deterministic research fallback below so every run still
         # starts with a visible, executable data-gathering step.
+        fallback_plan = _normalize_plan_for_query(user_query, _fallback_research_plan(user_query))
         return {
-            "plan": _fallback_research_plan(user_query),
+            "plan": fallback_plan,
             "pending_step_index": 0,
             "planning_cycle": planning_cycle,
             "error": f"planner LLM call failed: {exc}",
@@ -350,8 +396,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     parsed = _try_parse_plan(content)
     if not parsed or not parsed.get("plan"):
         logger.warning("planner: failed to parse plan (raw output: %r), using research fallback", content[:300])
+        fallback_plan = _normalize_plan_for_query(user_query, _fallback_research_plan(user_query))
         return {
-            "plan": _fallback_research_plan(user_query),
+            "plan": fallback_plan,
             "pending_step_index": 0,
             "planning_cycle": planning_cycle,
         }
@@ -376,11 +423,10 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     if not clean_plan:
         logger.warning("planner: every planned step was invalid, using research fallback")
         clean_plan = _fallback_research_plan(user_query)
-    else:
-        clean_plan = _normalize_plan_for_query(user_query, clean_plan)
-        if not clean_plan:
-            logger.warning("planner: every planned step was unnecessary, using research fallback")
-            clean_plan = _fallback_research_plan(user_query)
+    clean_plan = _normalize_plan_for_query(user_query, clean_plan)
+    if not clean_plan:
+        logger.warning("planner: every planned step was unnecessary, using research fallback")
+        clean_plan = _normalize_plan_for_query(user_query, _fallback_research_plan(user_query))
 
     logger.info(
         "planner: produced %d-step plan: %s",
@@ -404,14 +450,23 @@ def _fallback_research_plan(user_query: str) -> list[dict[str, Any]]:
     retrieve evidence before it can enter final synthesis.
     """
     q = user_query.strip()
-    financial_markers = ("股票", "股价", "行情", "市值", "涨", "跌", "财报", "公告", "研报", "基金", "债", "指数", "港股", "A股")
+    financial_markers = (
+        "股票", "股价", "行情", "市值", "涨", "跌", "资金", "走势", "分析",
+        "财报", "公告", "研报", "消息面", "基金", "债", "指数", "港股", "A股",
+    )
     if any(marker.lower() in q.lower() for marker in financial_markers) and (
         REGISTRY.get_spec("financial-query") and REGISTRY.is_enabled("financial-query")
     ):
+        financial_query = (
+            q.replace("资金面", "主力资金净流入、北向资金净流入")
+            .replace("消息面", "")
+            .replace("等等", "")
+            .strip(" ，,、")
+        )
         return [{
             "goal": "获取与问题直接相关的最新金融数据",
             "target_skill": "financial-query",
-            "args": {"query": q, "limit": "10"},
+            "args": {"query": financial_query, "limit": "10"},
             "success_criteria": "返回带来源和时点的可引用金融数据",
         }]
     if REGISTRY.get_spec("anysearch") and REGISTRY.is_enabled("anysearch"):

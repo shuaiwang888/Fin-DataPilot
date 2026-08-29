@@ -398,3 +398,81 @@ async def test_limit_up_list_stops_without_unrequested_vertical_skills() -> None
     assert out["reflection_verdict"] == "sufficient"
     assert "无需扩展" in out["reflection"]
     assert "next_skill_hint" not in out
+
+
+@pytest.mark.asyncio
+async def test_broad_company_analysis_continues_capability_validated_plan() -> None:
+    state = {
+        "user_query": "给出对阳光电源的分析，资金面、消息面、走势等等",
+        "history": [],
+        "tool_calls": [{
+            "name": "financial-query",
+            "args": {"query": "阳光电源近10日涨跌幅、主力资金净流入"},
+            "ok": True,
+            "result": {"data": {"datas": [_row("300274.SZ", "阳光电源", 2000.0)]}},
+            "error": None,
+            "trace_id": "sun-1",
+        }],
+        "plan": [
+            {"goal": "查资金走势", "target_skill": "financial-query", "args": {}},
+            {"goal": "查新闻", "target_skill": "news-search", "args": {}},
+            {"goal": "查公告", "target_skill": "announcement-search", "args": {}},
+            {"goal": "查研报", "target_skill": "report-search", "args": {}},
+        ],
+        "pending_step_index": 1,
+    }
+
+    with patch("app.agent.nodes.reflector.build_chat_model") as mock_build:
+        out = await reflector_node(state)  # type: ignore[arg-type]
+
+    mock_build.assert_not_called()
+    assert out["reflection_verdict"] == "need_more"
+    assert "news-search" in out["reflection"]
+    assert "announcement-search" in out["reflection"]
+    assert "report-search" in out["reflection"]
+    assert "next_skill_hint" not in out
+
+
+@pytest.mark.asyncio
+async def test_disabled_llm_reflection_still_continues_explicit_plan() -> None:
+    state = {
+        "user_query": "给出对阳光电源的分析，资金面、消息面、走势等等",
+        "tool_calls": [{"name": "financial-query", "ok": True}],
+        "plan": [
+            {"target_skill": "financial-query"},
+            {"target_skill": "news-search"},
+            {"target_skill": "announcement-search"},
+            {"target_skill": "report-search"},
+        ],
+        "pending_step_index": 1,
+    }
+    settings = type("Settings", (), {"agent_enable_reflection": False})()
+
+    with patch("app.agent.nodes.reflector.get_settings", return_value=settings):
+        out = await reflector_node(state)  # type: ignore[arg-type]
+
+    assert out["reflection_verdict"] == "need_more"
+
+
+@pytest.mark.asyncio
+async def test_failed_step_does_not_abort_remaining_independent_plan() -> None:
+    state = {
+        "user_query": "给出对阳光电源的分析，资金面、消息面、走势等等",
+        "tool_calls": [{
+            "name": "financial-query",
+            "ok": False,
+            "error": "upstream timeout",
+        }],
+        "plan": [
+            {"target_skill": "financial-query"},
+            {"target_skill": "news-search"},
+            {"target_skill": "announcement-search"},
+            {"target_skill": "report-search"},
+        ],
+        "pending_step_index": 1,
+    }
+
+    out = await reflector_node(state)  # type: ignore[arg-type]
+
+    assert out["reflection_verdict"] == "need_more"
+    assert "继续执行" in out["reflection"]

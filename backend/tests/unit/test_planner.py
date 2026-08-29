@@ -107,6 +107,27 @@ def test_normalize_plan_prunes_unrequested_research_for_limit_up_list() -> None:
     assert [step["target_skill"] for step in out] == ["financial-query"]
 
 
+def test_normalize_plan_adds_required_sources_for_broad_company_analysis() -> None:
+    plan = [{
+        "goal": "查资金和走势",
+        "target_skill": "financial-query",
+        "args": {"query": "阳光电源近10日涨跌幅、主力资金净流入"},
+    }]
+
+    out = _normalize_plan_for_query(
+        "给出对阳光电源的分析，资金面、消息面、走势等等",
+        plan,
+    )
+
+    assert [step["target_skill"] for step in out] == [
+        "financial-query",
+        "news-search",
+        "announcement-search",
+        "report-search",
+    ]
+    assert all("资金面" not in str(step["args"]) for step in out if step["target_skill"] == "financial-query")
+
+
 # --- planner_node: end-to-end with stubbed LLM ----------------------
 
 
@@ -165,6 +186,39 @@ async def test_planner_uses_latest_turn_and_prunes_hallucinated_followups() -> N
         out = await planner_node(state)  # type: ignore[arg-type]
 
     assert [step["target_skill"] for step in out["plan"]] == ["financial-query"]
+
+
+@pytest.mark.asyncio
+async def test_planner_repairs_underplanned_company_analysis() -> None:
+    state = {
+        "user_query": "给出对阳光电源的分析，资金面、消息面、走势等等",
+        "history": [],
+        "tool_calls": [],
+        "plan": [],
+        "pending_step_index": 0,
+    }
+    fake_plan = {
+        "plan": [{
+            "goal": "查询行情资金走势",
+            "target_skill": "financial-query",
+            "args": {
+                "query": "阳光电源近10日涨跌幅、成交额、换手率、主力资金净流入",
+                "limit": "20",
+            },
+        }]
+    }
+    with patch("app.agent.nodes.planner.build_chat_model") as mock_build:
+        llm = AsyncMock()
+        llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": json.dumps(fake_plan)})())
+        mock_build.return_value = llm
+        out = await planner_node(state)  # type: ignore[arg-type]
+
+    assert [step["target_skill"] for step in out["plan"]] == [
+        "financial-query",
+        "news-search",
+        "announcement-search",
+        "report-search",
+    ]
 
 
 @pytest.mark.asyncio

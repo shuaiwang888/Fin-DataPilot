@@ -7,6 +7,8 @@ description: >-
   未明确标的类型时默认按股票处理。条件筛选必须把用户原始问句中的全部条件放进同一个 query，禁止拆散、
   删减或自行改写；诊股指标超过 5 个时拆成多个独立调用；明确标的查询必须带具体指标和明确时间。
   不支持抽象时间推断、复杂逻辑推断或天气等非金融指标，query 不得包含“资金面”。
+  不提供财经新闻全文、公司公告正文或机构研报观点；这些非结构化内容应分别使用 news-search、
+  announcement-search、report-search 获取。
 license: Complete terms in LICENSE.txt
 ---
 
