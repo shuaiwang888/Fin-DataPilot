@@ -1,5 +1,6 @@
 import { Collapse } from "antd";
-import { useState } from "react";
+import { CheckOutlined, LoadingOutlined } from "@ant-design/icons";
+import { useEffect, useState } from "react";
 import type { ThinkingStep } from "../../stores/chatStore";
 import { useChatStore } from "../../stores/chatStore";
 
@@ -8,13 +9,14 @@ interface Props {
 }
 
 const stepLabel: Record<string, string> = {
-  entry: "入口",
-  plan: "执行计划",
-  load_skills: "加载能力",
-  finalize: "汇总",
-  router_final: "路由收口",
-  reflect: "反思",
-  synth_reason: "思考",
+  entry: "理解问题",
+  plan: "制定计划",
+  load_skills: "准备能力",
+  finalize: "开始汇总",
+  router_final: "数据完成",
+  reflect: "检查证据",
+  synth_reason: "组织结论",
+  recover: "恢复连接",
 };
 
 export function ThinkingPanel({ steps }: Props) {
@@ -29,11 +31,18 @@ export function ThinkingPanel({ steps }: Props) {
   const isOpen = userOverride ? userOverride === "open" : defaultOpen;
   const [activeKeys, setActiveKeys] = useState<string[]>(isOpen ? ["thinking"] : []);
 
+  useEffect(() => {
+    if (userOverride === null) {
+      setActiveKeys(isOpen ? ["thinking"] : []);
+    }
+  }, [isOpen, userOverride]);
+
   if (!steps || steps.length === 0) return null;
   const isThinking = steps.some((s) => s.text === "💭 思考中…");
   return (
     <Collapse
-      ghost
+      className="fdp-process-panel"
+      bordered={false}
       size="small"
       activeKey={activeKeys}
       onChange={(k) => {
@@ -47,31 +56,28 @@ export function ThinkingPanel({ steps }: Props) {
         {
           key: "thinking",
           label: (
-            <span style={{ fontSize: 12, color: "#888" }}>
-              {isThinking ? "🧠 思考中…" : "🧠 思考过程"} ({steps.length} 步)
-              {isThinking && (
-                <span style={{ marginLeft: 8, color: "#1677ff" }}>
-                  <span className="fdp-thinking-pulse" />
-                </span>
-              )}
+            <span className="fdp-process-heading">
+              <span className={`fdp-process-symbol ${isThinking ? "is-live" : "is-complete"}`}>
+                {isThinking ? <LoadingOutlined spin /> : <CheckOutlined />}
+              </span>
+              <span>
+                <strong>{isThinking ? "正在收集与核验证据" : "分析过程"}</strong>
+                <small>{steps.length} 个状态更新</small>
+              </span>
             </span>
           ),
           children: (
-            <div>
-              {steps.map((s) => (
+            <div className="fdp-process-timeline">
+              {steps.map((s, index) => (
                 <div
                   key={s.id}
-                  className="fdp-thinking"
-                  style={{
-                    whiteSpace: s.text === "💭 思考中…" ? "normal" : "pre-wrap",
-                  }}
+                  className={`fdp-process-step ${s.text === "💭 思考中…" ? "is-live" : ""}`}
                 >
-                  <span className="fdp-step-tag">{stepLabel[s.step] ?? s.step}</span>
-                  {s.text === "💭 思考中…" ? (
-                    <span style={{ color: "#1677ff" }}>思考中…</span>
-                  ) : (
-                    s.text
-                  )}
+                  <span className="fdp-process-index">{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <span className="fdp-process-step-name">{stepLabel[s.step] ?? s.step}</span>
+                    <p>{s.text === "💭 思考中…" ? "正在等待下一个可验证结果…" : s.text}</p>
+                  </div>
                 </div>
               ))}
             </div>

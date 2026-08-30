@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Sender } from "@ant-design/x";
-import { BulbOutlined, PaperClipOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
+import { SafetyCertificateOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useChatStream } from "../../hooks/useChatStream";
 
 interface Props {
@@ -30,7 +30,12 @@ export function MessageInput({ disabled }: Props) {
   return (
     <div className="fdp-input-area">
       <div className="fdp-composer-shell">
-        <div className="fdp-composer-label"><BulbOutlined /> 向 DataPilot 提问</div>
+        <div className="fdp-composer-label">
+          <span><ThunderboltOutlined /> DataPilot</span>
+          <em className={streaming ? "is-streaming" : ""}>
+            {streaming ? "正在执行研究计划" : "就绪"}
+          </em>
+        </div>
         <Sender
           value={value}
           onChange={setValue}
@@ -39,11 +44,10 @@ export function MessageInput({ disabled }: Props) {
           // "stop" button. Hook it to the AbortController-backed stop()
           // from the chat hook.
           onCancel={streaming ? stop : undefined}
-          placeholder="输入公司、指标、行业或事件，开始一次深度分析…"
+          placeholder="提问公司、行业、行情或市场事件…"
           loading={streaming}
           disabled={disabled}
           autoSize={{ minRows: 1, maxRows: 6 }}
-          prefix={<PaperClipOutlined className="fdp-attach-icon" />}
           className="fdp-sender"
         />
         <div className="fdp-composer-meta">

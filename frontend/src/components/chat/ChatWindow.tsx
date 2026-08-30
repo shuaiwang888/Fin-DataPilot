@@ -4,6 +4,7 @@ import {
   FundOutlined,
   GlobalOutlined,
   LineChartOutlined,
+  RadarChartOutlined,
   RiseOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
@@ -19,25 +20,33 @@ const promptGroups = [
     icon: <LineChartOutlined />,
     tone: "emerald",
     eyebrow: "公司研究",
-    title: "快速了解一家上市公司",
-    prompt: "分析贵州茅台最新估值水平和盈利能力",
-    detail: "估值 · 财务 · 经营质量",
+    title: "给出一家公司的完整画像",
+    prompt: "分析阳光电源的资金面、消息面和近期走势",
+    detail: "行情、资金、新闻与公告",
   },
   {
     icon: <FundOutlined />,
     tone: "gold",
     eyebrow: "行业筛选",
-    title: "从全市场发现投资线索",
+    title: "用多个条件筛选标的",
     prompt: "筛选银行股中股息率最高的 10 家公司",
-    detail: "选股 · 排名 · 横向对比",
+    detail: "筛选、排名与横向对比",
   },
   {
     icon: <GlobalOutlined />,
     tone: "blue",
     eyebrow: "事件追踪",
-    title: "追踪新闻与市场催化",
+    title: "追踪新闻与公司事件",
     prompt: "整理宁德时代最近的重要新闻和潜在影响",
-    detail: "新闻 · 公告 · 情绪信号",
+    detail: "新闻、公告与市场催化",
+  },
+  {
+    icon: <RadarChartOutlined />,
+    tone: "violet",
+    eyebrow: "市场观察",
+    title: "观察当日市场结构",
+    prompt: "今日涨停的股票有哪些，按行业和市值整理",
+    detail: "行情、板块与交易特征",
   },
 ];
 
@@ -58,15 +67,23 @@ export function ChatWindow() {
   if (messages.length === 0) {
     return (
       <div className="fdp-welcome">
-        <div className="fdp-welcome-orb fdp-orb-one" />
-        <div className="fdp-welcome-orb fdp-orb-two" />
         <div className="fdp-welcome-inner">
-          <div className="fdp-welcome-kicker"><ThunderboltOutlined /> AI 驱动的金融研究工作台</div>
-          <h1>把复杂数据，变成<br /><span>清晰的投资洞察。</span></h1>
+          <div className="fdp-welcome-kicker"><ThunderboltOutlined /> 多源金融数据智能体</div>
+          <h1>从问题到证据，<br /><span>再到清晰判断。</span></h1>
           <p className="fdp-welcome-lead">
-            用自然语言连接行情、财务、新闻与公告。告诉我你想研究什么，
-            我会规划路径、调用数据并给出可追溯的分析。
+            用自然语言连接行情、资金、财务、新闻、公告与研报。
+            DataPilot 会拆解问题、核验证据，然后给出可追溯的结论。
           </p>
+
+          <div className="fdp-capability-strip" aria-label="研究流程">
+            <span><b>01</b> 拆解问题</span>
+            <i />
+            <span><b>02</b> 调用数据</span>
+            <i />
+            <span><b>03</b> 核验证据</span>
+            <i />
+            <span><b>04</b> 综合分析</span>
+          </div>
 
           <div className="fdp-prompt-grid">
             {promptGroups.map((item) => (
@@ -80,17 +97,17 @@ export function ChatWindow() {
                 <span className="fdp-prompt-eyebrow">{item.eyebrow}</span>
                 <strong>{item.title}</strong>
                 <span className="fdp-prompt-detail">{item.detail}</span>
-                <span className="fdp-prompt-action">试试这个问题 <ArrowRightOutlined /></span>
+                <span className="fdp-prompt-action">开始这项研究 <ArrowRightOutlined /></span>
               </button>
             ))}
           </div>
 
           <div className="fdp-welcome-footnote">
-            <span><RiseOutlined /> 多源数据联动</span>
+            <span><RiseOutlined /> 最多 8 次必要取数</span>
             <i />
-            <span><SafetyCertificateOutlined /> 结果过程可追溯</span>
+            <span><SafetyCertificateOutlined /> 证据与结论分层呈现</span>
             <i />
-            <span>7×24 小时研究陪伴</span>
+            <span>分析仅供研究参考</span>
           </div>
         </div>
       </div>

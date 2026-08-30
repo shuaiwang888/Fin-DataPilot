@@ -4,7 +4,6 @@ import {
   AppstoreOutlined,
   BarChartOutlined,
   MenuOutlined,
-  MoreOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { Sidebar } from "./components/layout/Sidebar";
@@ -71,16 +70,16 @@ export default function App() {
                 aria-label="打开侧边栏"
                 onClick={() => setSidebarOpen(true)}
               />
-              <div className="fdp-toolbar-icon"><BarChartOutlined /></div>
+              <div className="fdp-toolbar-icon" aria-hidden="true"><BarChartOutlined /></div>
               <div className="fdp-toolbar-copy">
                 <strong>{activeSession?.title || "新建分析"}</strong>
-                <span>{activeSession ? "智能金融数据会话" : "从一个问题开始你的研究"}</span>
+                <span>{activeSession ? "证据驱动的金融研究" : "从一个问题开始"}</span>
               </div>
             </div>
             <div className="fdp-toolbar-actions">
-              <div className="fdp-live-status">
+              <div className="fdp-live-status" role="status" aria-label="数据服务正常">
                 <span className="fdp-live-dot" />
-                数据服务正常
+                服务在线
               </div>
               <Tooltip title="查看可用分析能力">
                 <Button
@@ -88,13 +87,17 @@ export default function App() {
                   icon={<AppstoreOutlined />}
                   onClick={() => openSkillDrawer(true)}
                 >
-                  {enabledSkills || 0} 项能力
+                  能力 <span className="fdp-capability-count">{enabledSkills || 0}</span>
                 </Button>
               </Tooltip>
-              <Tooltip title="匿名会话已受保护">
-                <Button type="text" className="fdp-toolbar-quiet" icon={<SafetyCertificateOutlined />} />
+              <Tooltip title="当前为匿名安全会话">
+                <Button
+                  type="text"
+                  className="fdp-toolbar-quiet"
+                  icon={<SafetyCertificateOutlined />}
+                  aria-label="匿名安全会话"
+                />
               </Tooltip>
-              <Button type="text" className="fdp-toolbar-more" icon={<MoreOutlined />} aria-label="更多" />
             </div>
           </div>
           <ChatWindow />

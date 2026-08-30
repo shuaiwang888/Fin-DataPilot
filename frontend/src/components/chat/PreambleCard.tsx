@@ -1,4 +1,4 @@
-import { Tag } from "antd";
+import { CheckCircleFilled, SearchOutlined } from "@ant-design/icons";
 import type { AnswerPreamble } from "../../lib/types";
 
 interface Props {
@@ -15,37 +15,22 @@ export function PreambleCard({ preamble }: Props) {
       : [];
 
   return (
-    <div
-      className="fdp-preamble"
-      style={{
-        background: "#f0f5ff",
-        border: "1px solid #d6e4ff",
-        borderRadius: 8,
-        padding: "8px 12px",
-        margin: "8px 0",
-        fontSize: 12,
-        color: "#333",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, marginBottom: chunks.length ? 4 : 0 }}>
-        <span style={{ color: "#888" }}>🔎 实际查询：</span>
-        <code style={{ background: "#fff", padding: "1px 6px", borderRadius: 4, color: "#1677ff" }}>
-          {actual_query || JSON.stringify(args)}
-        </code>
-        <Tag color={truncated ? "orange" : "green"} style={{ marginLeft: 4 }}>
-          {returned_count} / {code_count} 条
-          {truncated && "（数据较多，仅展示前 N 条）"}
-        </Tag>
-        {skill_name && <Tag>{skill_name}</Tag>}
-      </div>
-      {chunks.length > 0 && (
-        <div style={{ color: "#666" }}>
-          <span style={{ color: "#888" }}>解析条件：</span>
-          <code style={{ background: "#fff", padding: "1px 6px", borderRadius: 4, color: "#555" }}>
-            {chunks.join(" · ")}
-          </code>
+    <div className="fdp-preamble">
+      <span className="fdp-preamble-icon"><SearchOutlined /></span>
+      <div className="fdp-preamble-content">
+        <div className="fdp-preamble-title">
+          <strong>查询覆盖</strong>
+          <span className={truncated ? "is-truncated" : ""}>
+            <CheckCircleFilled /> {returned_count} / {code_count} 条
+          </span>
+          {skill_name && <em>{skill_name}</em>}
         </div>
-      )}
+        <code>{actual_query || JSON.stringify(args)}</code>
+        {truncated && <small>结果较多，当前仅展示部分数据。</small>}
+        {chunks.length > 0 && (
+          <p><span>解析条件</span>{chunks.join(" · ")}</p>
+        )}
+      </div>
     </div>
   );
 }

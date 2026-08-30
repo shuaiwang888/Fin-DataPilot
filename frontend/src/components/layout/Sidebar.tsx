@@ -9,7 +9,8 @@ import {
   BankOutlined,
   MessageOutlined,
   ClockCircleOutlined,
-  SettingOutlined,
+  SafetyCertificateOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useSessionStore } from "../../stores/sessionStore";
@@ -166,9 +167,16 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
       <div className="fdp-brand">
         <div className="fdp-brand-mark"><BankOutlined /></div>
         <div className="fdp-brand-name">
-          <strong>Fin DataPilot</strong>
-          <span>AI RESEARCH WORKSPACE</span>
+          <strong>DataPilot</strong>
+          <span>FINANCIAL RESEARCH</span>
         </div>
+        <Button
+          type="text"
+          className="fdp-sidebar-close"
+          icon={<CloseOutlined />}
+          aria-label="关闭侧边栏"
+          onClick={onMobileClose}
+        />
       </div>
       <div className="fdp-new-chat-wrap">
         <Button
@@ -305,8 +313,8 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
         )}
         <div className="fdp-profile-card">
           <div className="fdp-profile-avatar">DP</div>
-          <div className="fdp-profile-copy"><strong>本地研究员</strong><span>匿名安全会话</span></div>
-          <SettingOutlined />
+          <div className="fdp-profile-copy"><strong>个人研究空间</strong><span>匿名安全会话</span></div>
+          <SafetyCertificateOutlined className="fdp-profile-security" />
         </div>
       </div>
       {memoryManagerMounted && (

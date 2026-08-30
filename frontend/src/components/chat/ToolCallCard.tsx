@@ -1,5 +1,11 @@
 import { useState } from "react";
 import { Collapse } from "antd";
+import {
+  CheckCircleFilled,
+  CloseCircleFilled,
+  DatabaseOutlined,
+  LoadingOutlined,
+} from "@ant-design/icons";
 import type { ToolCallRecord } from "../../stores/chatStore";
 
 interface Props {
@@ -29,45 +35,65 @@ function asTable(data: unknown): { headers: string[]; rows: Array<Record<string,
 export function ToolCallCard({ records }: Props) {
   if (!records || records.length === 0) return null;
   return (
-    <div style={{ margin: "8px 0" }}>
+    <section className="fdp-evidence-stack" aria-label="Skill 执行记录">
+      <div className="fdp-evidence-stack-head">
+        <span>证据收集</span>
+        <small>{records.filter((record) => record.ok === true).length}/{records.length} 已完成</small>
+      </div>
       {records.map((r, i) => (
         <ToolCallItem key={`${r.trace_id}-${i}`} record={r} />
       ))}
-    </div>
+    </section>
   );
 }
 
 function ToolCallItem({ record }: { record: ToolCallRecord }) {
   const table = record.result ? asTable(record.result) : null;
-  const status = record.ok === undefined ? "⏳" : record.ok ? "✅" : "❌";
+  const pending = record.ok === undefined;
+  const statusLabel = pending ? "执行中" : record.ok ? "已完成" : "失败";
+  const statusIcon = pending
+    ? <LoadingOutlined spin />
+    : record.ok
+      ? <CheckCircleFilled />
+      : <CloseCircleFilled />;
   return (
-    <div className={`fdp-tool-call ${record.ok === false ? "error" : ""}`}>
-      <div>
-        <strong>{status} {record.name}</strong>
-        <span style={{ color: "#999", marginLeft: 8, fontSize: 11 }}>
-          {record.duration_ms ? `${record.duration_ms}ms` : ""}
-          {record.trace_id ? ` · ${record.trace_id.slice(0, 8)}` : ""}
+    <div className={`fdp-tool-call ${record.ok === false ? "error" : ""} ${pending ? "is-pending" : ""}`}>
+      <div className="fdp-tool-call-head">
+        <span className="fdp-tool-icon"><DatabaseOutlined /></span>
+        <div className="fdp-tool-identity">
+          <strong>{record.name}</strong>
+          <span>
+            {record.trace_id ? `#${record.trace_id.slice(0, 8)}` : "金融数据能力"}
+            {record.duration_ms ? ` · ${record.duration_ms}ms` : ""}
+          </span>
+        </div>
+        <span className="fdp-tool-status">
+          {statusIcon} {statusLabel}
         </span>
       </div>
-      <div style={{ color: "#555", marginTop: 4 }}>
-        <span className="fdp-step-tag">args</span>
-        <code style={{ fontSize: 12 }}>{JSON.stringify(record.args)}</code>
+      <div className="fdp-tool-query">
+        <span>查询</span>
+        <code>{String(record.args?.query ?? JSON.stringify(record.args))}</code>
       </div>
       {record.error && (
-        <div style={{ color: "#cf1322", marginTop: 4 }}>⚠️ {record.error}</div>
+        <div className="fdp-tool-error">调用失败：{record.error}</div>
       )}
       {table && (
         <Collapse
+          className="fdp-result-collapse"
           ghost
           size="small"
           items={[
             {
               key: "table",
-              label: <span style={{ fontSize: 12 }}>📊 {table.rows.length} 行结果</span>,
+              label: <span>查看 {table.rows.length} 条结构化结果</span>,
               children: <ResultTable headers={table.headers} rows={table.rows.slice(0, 20)} />,
             },
           ]}
         />
+      )}
+      {!pending && record.ok && !table && (
+        <div className="fdp-tool-result-note">已取得非结构化证据，将在最终结论中引用。</div>
       )}
     </div>
   );
@@ -90,24 +116,25 @@ function ResultTable({
       })
     : rows;
   return (
-    <div style={{ overflowX: "auto", maxHeight: 320, overflowY: "auto" }}>
+    <div className="fdp-result-table-wrap">
       <table className="fdp-tool-result-table">
         <thead>
           <tr>
             {headers.map((h) => (
-              <th
-                key={h}
-                onClick={() => {
-                  if (sortKey === h) setAsc(!asc);
-                  else {
-                    setSortKey(h);
-                    setAsc(true);
-                  }
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                {h}
-                {sortKey === h ? (asc ? " ▲" : " ▼") : ""}
+              <th key={h}>
+                <button
+                  type="button"
+                  className="fdp-sort-button"
+                  onClick={() => {
+                    if (sortKey === h) setAsc(!asc);
+                    else {
+                      setSortKey(h);
+                      setAsc(true);
+                    }
+                  }}
+                >
+                  {h}{sortKey === h ? (asc ? " ↑" : " ↓") : ""}
+                </button>
               </th>
             ))}
           </tr>
