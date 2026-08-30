@@ -13,15 +13,15 @@
     "@ant-design/icons": "^5.5.2",
     "@ant-design/x": "^1.1.1",
     "antd": "^5.22.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
-    "@types/react": "^18.3.12",
+    "@types/react": "^19.2.18",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "eslint": "^9.17.0",
