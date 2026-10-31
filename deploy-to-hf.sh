@@ -71,7 +71,7 @@ sdk: docker
 app_port: 7860
 pinned: true
 license: mit
-short_description: NL financial data agent (LangGraph + 4 iWencai skills + AnySearch)
+short_description: NL financial data agent (LangGraph + skills)
 ---
 
 # Fin-DataPilot Backend
