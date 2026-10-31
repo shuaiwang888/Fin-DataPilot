@@ -61,7 +61,7 @@ export function ThinkingPanel({ steps }: Props) {
                 {isThinking ? <LoadingOutlined spin /> : <CheckOutlined />}
               </span>
               <span>
-                <strong>{isThinking ? "正在收集与核验证据" : "分析过程"}</strong>
+                <strong>{isThinking ? "正在收集与核验证据" : "工作底稿"}</strong>
                 <small>{steps.length} 个状态更新</small>
               </span>
             </span>

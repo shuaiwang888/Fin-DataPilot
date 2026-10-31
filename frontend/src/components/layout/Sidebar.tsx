@@ -167,8 +167,8 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
       <div className="fdp-brand">
         <div className="fdp-brand-mark"><BankOutlined /></div>
         <div className="fdp-brand-name">
-          <strong>DataPilot</strong>
-          <span>FINANCIAL RESEARCH</span>
+          <strong>Fin-DataPilot</strong>
+          <span>研究档案</span>
         </div>
         <Button
           type="text"
@@ -187,11 +187,11 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           size="large"
           className="fdp-new-chat"
         >
-          新建分析
+          新开研究
         </Button>
       </div>
       <div className="fdp-sidebar-section-head">
-        <span><ClockCircleOutlined /> 最近会话</span>
+        <span><ClockCircleOutlined /> 档案</span>
         <span className="fdp-session-count">{sessions.length}</span>
       </div>
       <div className="fdp-session-list">
@@ -313,7 +313,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
         )}
         <div className="fdp-profile-card">
           <div className="fdp-profile-avatar">DP</div>
-          <div className="fdp-profile-copy"><strong>个人研究空间</strong><span>匿名安全会话</span></div>
+          <div className="fdp-profile-copy"><strong>个人研究空间</strong><span>匿名会话，清站点数据即新身份</span></div>
           <SafetyCertificateOutlined className="fdp-profile-security" />
         </div>
       </div>

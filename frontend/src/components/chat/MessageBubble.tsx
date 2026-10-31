@@ -4,7 +4,7 @@ import type { ChatMessage } from "../../stores/chatStore";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { ToolCallCard } from "./ToolCallCard";
 import { PreambleCard } from "./PreambleCard";
-import { RobotOutlined, UserOutlined } from "@ant-design/icons";
+import { FileTextOutlined, FormOutlined } from "@ant-design/icons";
 
 interface Props {
   msg: ChatMessage;
@@ -21,8 +21,8 @@ export const MessageBubble = memo(function MessageBubble({ msg }: Props) {
   return (
     <div className={`fdp-message-row ${isUser ? "is-user" : "is-assistant"}`}>
       <div className="fdp-message-author">
-        <span className="fdp-message-avatar">{isUser ? <UserOutlined /> : <RobotOutlined />}</span>
-        <div><strong>{isUser ? "你" : "DataPilot"}</strong><span>{isUser ? "研究问题" : "金融分析助手"}</span></div>
+        <span className="fdp-message-avatar">{isUser ? <FormOutlined /> : <FileTextOutlined />}</span>
+        <div><strong>{isUser ? "研究问题" : "研究备忘"}</strong><span>{isUser ? "你的提问" : "只依据已取到的证据"}</span></div>
       </div>
       <div className="fdp-message-body">
         {!isUser && msg.thinking && msg.thinking.length > 0 && (

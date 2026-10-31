@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Sender } from "@ant-design/x";
-import { SafetyCertificateOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { SafetyCertificateOutlined } from "@ant-design/icons";
 import { useChatStream } from "../../hooks/useChatStream";
 
 interface Props {
@@ -14,7 +14,11 @@ export function MessageInput({ disabled }: Props) {
   useEffect(() => {
     const handlePrompt = (event: Event) => {
       const prompt = (event as CustomEvent<string>).detail;
-      if (prompt) setValue(prompt);
+      if (!prompt) return;
+      setValue(prompt);
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLTextAreaElement>(".fdp-sender textarea")?.focus();
+      });
     };
     window.addEventListener("fdp:select-prompt", handlePrompt);
     return () => window.removeEventListener("fdp:select-prompt", handlePrompt);
@@ -31,9 +35,9 @@ export function MessageInput({ disabled }: Props) {
     <div className="fdp-input-area">
       <div className="fdp-composer-shell">
         <div className="fdp-composer-label">
-          <span><ThunderboltOutlined /> DataPilot</span>
+          <span>研究问题</span>
           <em className={streaming ? "is-streaming" : ""}>
-            {streaming ? "正在执行研究计划" : "就绪"}
+            {streaming ? "正在取数并核对" : "可以提问"}
           </em>
         </div>
         <Sender
@@ -44,7 +48,7 @@ export function MessageInput({ disabled }: Props) {
           // "stop" button. Hook it to the AbortController-backed stop()
           // from the chat hook.
           onCancel={streaming ? stop : undefined}
-          placeholder="提问公司、行业、行情或市场事件…"
+          placeholder="例如：对比宁德时代和阳光电源最近一个季度的营收与机构观点"
           loading={streaming}
           disabled={disabled}
           autoSize={{ minRows: 1, maxRows: 6 }}
