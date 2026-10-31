@@ -326,6 +326,15 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     — the reflector clears the plan to force a re-invocation.
     """
     user_query = state.get("user_query", "")
+    if state.get("reuse_prior_evidence"):
+        logger.info("planner: presentation follow-up, reusing evidence already in the session")
+        return {
+            "plan": [],
+            "pending_step_index": 0,
+            "planning_cycle": state.get("planning_cycle", 0),
+            "next_skill_hint": None,
+            "next_args_hint": None,
+        }
     history = state.get("history", []) or []
     # If the planner is invoked a second time (replan), prepend the
     # prior plan + all tool results so the LLM has the full context.

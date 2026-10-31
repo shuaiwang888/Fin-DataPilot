@@ -10,7 +10,7 @@
 #   3. Pushes it to the `hf` git remote
 #
 # The HF Space root must contain: Dockerfile, app/, requirements.txt, start.sh
-# (Skills/ is mounted at /Skills inside the container — agent reads it from there.)
+# (Skills/ is copied to /app/Skills inside the container.)
 #
 # Triggered by CI on every push to main (paths: backend/**, Skills/**,
 # this file, the workflow file). Use HF_TOKEN repo secret to push via
@@ -71,7 +71,7 @@ sdk: docker
 app_port: 7860
 pinned: true
 license: mit
-short_description: NL financial data agent (LangGraph + 4 iWencai skills)
+short_description: NL financial data agent (LangGraph + 4 iWencai skills + AnySearch)
 ---
 
 # Fin-DataPilot Backend
@@ -79,15 +79,21 @@ short_description: NL financial data agent (LangGraph + 4 iWencai skills)
 Agent-based natural-language financial data platform. See root `README.md` for the full design.
 
 - Health: `GET /api/health`
-- Skills: `GET /api/skills` (and `PATCH /api/skills/{name}` to enable/disable)
+- Skills: `GET /api/skills` (Bearer); operator changes require `X-API-Key`
 - Sessions: `POST /api/sessions`, `GET /api/sessions`, `GET /api/sessions/{id}`
 - Chat (SSE): `POST /api/agent/chat/stream`
 
 Configure secrets in the Space's "Variables and secrets" tab:
+- `DATA_PILOT_ENV=production`
+- `AUTH_SECRET` (stable random value; required in production)
 - `LLM_BASE_URL` (default `https://api.minimaxi.com/v1`)
 - `LLM_API_KEY`
 - `IWENCAI_API_KEY`
 - `CORS_ALLOW_ORIGINS` (your GitHub Pages / Vercel frontend origin)
+- `ADMIN_API_KEY` (optional; required for diagnostics and Skill management)
+
+Attach read-write persistent storage at `/data`; otherwise SQLite history and
+memory are lost when the Space is rebuilt.
 EOF
 
 # 6. .gitignore inside deploy dir

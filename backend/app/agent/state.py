@@ -36,6 +36,9 @@ class AgentState(TypedDict, total=False):
     # Read-only recalled context. It is populated before the graph starts and
     # treated as untrusted user data by every LLM prompt.
     memory_context: str
+    # A presentation follow-up rewrites evidence already saved in the session
+    # instead of dispatching another Skill.
+    reuse_prior_evidence: bool
     # Ephemeral single-run scratchpad; never persisted as long-term memory.
     working_memory: dict[str, Any]
 

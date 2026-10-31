@@ -1,130 +1,234 @@
 # Fin-DataPilot
 
-> 自然语言金融数据 Agent 平台。基于 LangGraph + LangChain + FastAPI + React，以 Skill 为工具，4 个核心 skill 全部由本项目的 Agent 统一调度。
+> 基于 LangGraph、LangChain、FastAPI、React 的自然语言金融研究 Agent。系统按需调用金融数据与联网搜索能力，经过规划、执行、反思和证据合成后生成可追溯回答。
 
-## ✨ 特性
+## 当前能力
 
-- **隔离会话 + 历史查询**：每个浏览器获得服务端签发的匿名 Bearer 身份，会话不再共享。
-- **三层 Agent 记忆**：单次运行工作记忆、会话级短期摘要、跨会话长期偏好/目标；全部按匿名浏览器身份隔离并可在界面管理、删除。
-- **思考过程可见**：SSE 实时推送 `think → tool_call → tool_result → reflection → summary` 事件链。
-- **受控 Skill 管理**：普通用户只能使用已发布 Skill；调试、开关、上传仅限管理员。上传默认关闭，代码 Skill 不在服务进程执行。
-- **多步反思循环**：Agent 逐步执行、每次取数后反思，最多 8 次 Skill 调用。
-- **可追踪运行**：每次提问有 `run_id`，支持服务端停止和完成后查询运行事件。
-- **流式回答**：`token_delta` 事件，前端 rAF 合并渲染。
+- **匿名身份隔离**：浏览器使用服务端签名的 Bearer 身份；客户端不能自行指定 `user_id`。
+- **会话与历史**：支持新建、切换、重命名、删除、清空；每个身份默认最多保留 50 个会话。
+- **三层记忆**：单次运行工作记忆、会话短期摘要、跨会话长期偏好/目标；均按匿名身份隔离并支持删除。
+- **多步 Agent**：`Planner → Skill Context Loader → Router → Executor → Reflector → Synthesizer`。
+- **证据不足自动补查**：支持计划占位符、实体消歧、空结果重试、AnySearch 兜底和重新规划。
+- **执行轨迹可见**：通过 SSE 展示计划、能力加载、工具调用、结果、反思和最终总结；不展示模型私有思维链。
+- **可恢复运行**：每次问题分配 `run_id`；SSE 断开后任务继续在后台执行，前端可轮询持久化结果。
+- **受控 Skill 管理**：普通用户只能查看和使用已发布能力；开关、调试、上传、删除只允许管理员操作。
+- **来源追踪**：工具结果包含来源、查询时点、引用、耗时和 trace ID。
 
-## 🏗️ 架构
+## 实际架构
 
+```text
+[ React 18 + Ant Design X + Zustand ]       GitHub Pages
+                    │
+             Bearer / REST / POST-SSE
+                    ▼
+[ FastAPI + LangGraph + SQLAlchemy :7860 ]  Hugging Face Space
+    ├── Auth / Sessions / Memories / Skills / Agent Runs
+    ├── Policy → Planner → Loader → Router → Executor → Reflector
+    │                                           │            │
+    │                                           └── 补查/重规划
+    ├── Synthesizer → token_delta → message_final
+    ├── ToolSpec / ToolResult / ToolRegistry
+    └── 5 个已注册能力
+        ├── financial-query      问财结构化金融数据
+        ├── news-search          问财财经新闻
+        ├── announcement-search  问财公告/事件
+        ├── report-search        问财研报
+        └── anysearch            联网搜索/URL 提取兜底
+                    │
+                    ▼
+        SQLite（本地或 HF /data）
 ```
-[ React + Ant Design X ]              ← GitHub Pages / Cloudflare Pages
-        │ HTTPS + SSE
-        ▼
-[ FastAPI + LangGraph :7860 ]         ← HuggingFace Spaces (Docker)
-    ├─ /api/auth/anonymous  /api/agent/chat/stream  /api/agent/chat/stop
-   ├─ /api/sessions     /api/skills   /api/health
-   ├─ ToolSpec / ToolRegistry
-   └─ 4 Skills:
-       ├─ financial-query    (金融数据查询 - 同花顺问财 query2data)
-       ├─ news-search        (财经资讯全文检索)
-       ├─ announcement-search(公告/事件检索)
-       └─ report-search      (研报全文检索)
-```
 
-## 📁 目录
+当前系统是**查询时按需取数**，不是批量 ETL 或金融数据仓库。外部结果会作为消息、运行事件和工具审计 JSON 持久化，但不会沉淀为指标宽表。
 
-```
+完整的数据流、表结构和实现边界见 [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)。
+
+## 目录
+
+```text
 Fin-DataPilot/
-├── PLAN.md                          # 详细实施计划
-├── Skills/                          # 4 个 skill 文档（agent 调度的工具）
-│   ├── financial-query/             # 金融数据查询（query2data）
-│   ├── news-search/                 # 新闻检索
-│   ├── announcement-search/         # 公告检索
-│   └── report-search/               # 研报检索
-├── backend/                         # FastAPI + LangGraph 后端
-│   ├── app/                         # 应用代码
-│   ├── tests/                       # 单元 + 端到端测试
-│   ├── requirements.txt
-│   ├── Dockerfile                   # HF Space 部署
+├── README.md                       # 项目入口与运行说明
+├── PROJECT_SUMMARY.md              # 当前实现的完整架构与数据流
+├── PLAN.md                         # 当前落地状态与后续路线图
+├── CLAUDE.md                       # 工程协作约定
+├── Skills/
+│   ├── financial-query/
+│   ├── news-search/
+│   ├── announcement-search/
+│   ├── report-search/
+│   └── anysearch-skill/
+├── backend/
+│   ├── app/                        # API、Agent、Skill、记忆与存储
+│   ├── tests/unit/
+│   ├── Dockerfile
 │   └── start.sh
-└── frontend/                        # React + Vite 前端
+├── frontend/src/                   # React 组件、Hook、API 与 Zustand Store
+└── .github/workflows/              # CI、前端部署、HF 后端部署
 ```
 
-## 🚀 快速开始
+## 快速开始
 
-### 1. 配置环境变量
+### 1. 配置后端
 
 ```bash
-cp .env.example .env
-# 编辑 .env，至少配置：
-#   LLM_API_KEY        (MiniMax / OpenAI / 其他 OpenAI 兼容)
-#   IWENCAI_API_KEY    (同花顺问财 - https://www.iwencai.com/skillhub)
+cp .env.example backend/.env
 ```
+
+至少设置：
+
+```dotenv
+LLM_API_KEY=<MiniMax、OpenAI 或其他 OpenAI 兼容服务密钥>
+IWENCAI_API_KEY=<同花顺问财 API 密钥>
+```
+
+本地开发可使用默认开发签名密钥；生产环境必须设置稳定、随机的 `AUTH_SECRET`。
 
 ### 2. 启动后端
 
 ```bash
 cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 ./start.sh
-# → http://localhost:7860/api/health
+```
+
+```bash
+curl http://localhost:7860/api/health
 ```
 
 ### 3. 启动前端
 
 ```bash
 cd frontend
+cp .env.example .env
 pnpm install
 pnpm dev
-# → http://localhost:5173
 ```
 
-浏览器首次访问会自动申请匿名身份；不要自行传递 `user_id`。
+前端默认地址为 `http://localhost:5173`。跨域部署时，将 `VITE_API_BASE` 设置为后端完整 Origin，不要带结尾 `/`。
 
-### 无登录用户如何区分
+浏览器首次访问会自动申请匿名身份。不要在请求参数中自行传递 `user_id`。
 
-服务端为每个浏览器签发不可伪造、可续期的匿名 Bearer 身份，前端保存在该浏览器的 `localStorage`。所有会话和记忆都只按令牌中的服务端签名 `user_id` 读写，客户端不能自行指定用户。该方案不使用不透明的浏览器指纹：同一浏览器可连续使用；清理站点数据、无痕窗口或更换设备会获得新身份，旧记忆无法恢复。若需要跨设备同步或身份找回，应接入正式登录/OIDC。
+## Agent 数据流
 
-生产环境必须设置稳定的 `AUTH_SECRET`，且必须为 Hugging Face Space 挂载读写 Storage Bucket 到 `/data`（或配置 Turso）；否则重启会丢失历史和记忆。
+一次提问的主流程：
 
-## 🛰️ 部署
+1. 前端乐观插入用户和 Assistant 消息，通过 POST SSE 发起请求。
+2. 后端校验 Bearer 身份和会话归属，保存用户消息。
+3. 加载历史、短期摘要和相关长期记忆，创建持久化 `run_id`。
+4. 后台 Task 执行 LangGraph；HTTP 连接只作为事件订阅者。
+5. Policy 拒绝真实交易操作，并在工具执行前检查时间窗口等限制。
+6. Planner 把问题拆成可执行计划；失败时生成确定性兜底检索步骤。
+7. Loader 从仓库固定的 `Skills/` 目录加载计划所需的 `SKILL.md` 和模板。
+8. Router 消费计划或 Reflector Hint，并替换前序结果占位符。
+9. Executor 通过 ToolRegistry 校验并调用 Skill，同时写入 `tool_runs` 审计表。
+10. Reflector 判断所有子目标是否覆盖；不足时补查或重新规划。
+11. Synthesizer 仅依据已有证据生成可读简报，不把 Skill 原始 JSON 当作答案；清理潜在 `<think>` 内容并附引用。用户要求改写上一轮回答时，沿用本会话已保存的证据，不再重新检索。
+12. 保存 Assistant 消息和终态；SSE 断开时通过 `GET /api/agent/runs/{run_id}` 恢复结果。
 
-- **后端**：HuggingFace Spaces（Docker SDK）— 推送 `backend/` 到 `git@hf.co:spaces/appQQQ/FinDataPilot`
-- **前端**：GitHub Pages / Cloudflare Pages — 由 `.github/workflows/deploy.yml` 自动部署
+默认安全上限：
 
-## 🔧 配置
+- 单个问题最多 8 次 Skill 调用。更大的环境变量值会被钳回 8。
+- 最多 5 个规划周期。
+- 单次后台运行最多 600 秒。
+- Agent 当前按依赖顺序串行调用 Skill。
 
-`.env` 关键项：
+## 身份、记忆与权限
 
-| 变量 | 说明 | 默认 |
+服务端为每个浏览器签发 HMAC 签名的匿名令牌，前端保存在 `localStorage`。同一浏览器可以连续使用；清理站点数据、无痕窗口或换设备会获得新身份。当前没有登录、跨设备同步或身份找回功能。
+
+路由权限分为：
+
+- **公共**：健康检查、匿名身份初始化。
+- **Bearer 用户**：会话、消息、记忆、Skill 列表、Agent 对话和运行恢复。
+- **管理员**：诊断、Skill 发布开关、调试、Prompt-only Skill 上传和删除，使用 `X-API-Key: $ADMIN_API_KEY`。
+
+`ADMIN_API_KEY` 绝不能放入任何 `VITE_*` 变量或公共前端构建。
+
+## 关键配置
+
+| 变量 | 说明 | 默认值/状态 |
 |---|---|---|
-| `LLM_PROVIDER` | `minimax` / `openai` / `anthropic` / `custom` | `minimax` |
+| `LLM_PROVIDER` | `minimax` / `openai` / `custom`；`anthropic` 分支需额外安装依赖 | `minimax` |
 | `LLM_BASE_URL` | OpenAI 兼容 API 地址 | `https://api.minimaxi.com/v1` |
 | `LLM_API_KEY` | LLM API 密钥 | 必填 |
 | `LLM_MODEL` | 模型名 | `MiniMax-M3` |
-| `IWENCAI_API_KEY` | 同花顺问财 API 密钥 | 必填 |
-| `CORS_ALLOW_ORIGINS` | 允许的前端 origin（逗号分隔） | `http://localhost:5173` |
-| `DATA_PILOT_PORT` | 后端端口 | `7860` |
-| `AUTH_SECRET` | 生产环境必须设置，用于签发浏览器身份令牌 | 必填（生产） |
-| `AUTH_TOKEN_TTL_HOURS` | 匿名身份有效期；前端会在到期前续期 | `8760` |
-| `ADMIN_API_KEY` | 保护诊断与 Skill 管理接口；绝不写入 `VITE_*` | 可选 |
-| `ENABLE_SKILL_UPLOAD` | 是否允许管理员上传**仅 Prompt** Skill | `false` |
-| `AGENT_MAX_SKILL_CALLS` | 单个问题的 Skill 调用硬上限 | `48` |
-| `AGENT_MAX_PLANNING_CYCLES` | 证据不足时允许的重规划轮数 | `5` |
-| `AGENT_SKILL_RESOURCE_MAX_CHARS` | 每轮注入 Skill 说明/模板的字符上限 | `12000` |
-| `AGENT_RUN_TIMEOUT_SECONDS` | 单次后台执行的最长时间（秒） | `600` |
+| `IWENCAI_API_KEY` | 4 个问财金融 Skill 的密钥 | 必填 |
+| `ANYSEARCH_API_KEY` | AnySearch 较高限额密钥；为空时允许匿名模式 | 空 |
+| `CORS_ALLOW_ORIGINS` | 允许的前端 Origin，逗号分隔 | 本地开发地址 |
+| `AUTH_SECRET` | 匿名身份签名密钥 | 生产必填 |
+| `AUTH_TOKEN_TTL_HOURS` | 匿名令牌有效期 | `8760` |
+| `ADMIN_API_KEY` | 管理员接口密钥 | 空 |
+| `LOCAL_SQLITE_PATH` | 本地 SQLite 路径 | `./data/findatapilot.db` |
+| `MAX_SESSIONS_PER_USER` | 每个身份保留的会话数；0 表示不限制 | `50` |
 | `MEMORY_ENABLED` | 是否启用短期/长期记忆 | `true` |
-| `MEMORY_SHORT_TERM_TTL_DAYS` | 会话摘要有效期 | `30` |
-| `MEMORY_LONG_TERM_MAX_ITEMS` | 每个匿名身份的长期记忆上限 | `100` |
+| `AGENT_MAX_SKILL_CALLS` | 每题 Skill 调用硬上限，超过 8 会被钳回 | `8` |
+| `AGENT_MAX_PLANNING_CYCLES` | 最大规划周期 | `5` |
+| `AGENT_RUN_TIMEOUT_SECONDS` | 后台运行超时 | `600` |
+| `ENABLE_SKILL_UPLOAD` | 是否允许管理员上传 Prompt-only Skill | `false` |
 
-## 管理与运行接口
+Turso、Anthropic 和 LangFuse 目前属于扩展位，并非默认 CI 覆盖的完整生产路径，详见 [PLAN.md](PLAN.md)。
 
-- `POST /api/auth/anonymous`：初始化浏览器身份；前端已自动调用。
-- `GET /api/memories`、`DELETE /api/memories/{id}`、`DELETE /api/memories`：查看、逐条删除或清空当前浏览器身份的记忆。
-- `POST /api/agent/chat/stream`：携带 `Authorization: Bearer <token>` 发起 SSE。
-- `POST /api/agent/chat/stop`：同一身份传 `{ "run_id": "..." }` 停止任务。
-- `GET /api/agent/runs/{run_id}`：同一身份读取已持久化的执行事件与最终状态。
-- `/api/diag`、Skill 调试/开关/上传/删除：携带 `X-API-Key: $ADMIN_API_KEY`。生产环境请保持 `ENABLE_SKILL_UPLOAD=false`；代码 Skill 始终拒绝。
+## API 摘要
 
-## 📜 License
+- `POST /api/auth/anonymous`：初始化或续期匿名身份。
+- `GET /api/sessions`、`POST /api/sessions`：查询和创建会话。
+- `GET /api/sessions/{id}`：返回会话及其消息。
+- `PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}`：重命名和删除。
+- `GET /api/memories`、`DELETE /api/memories/{id}`、`DELETE /api/memories`：记忆管理。
+- `GET /api/skills`：查看已注册能力及配置状态。
+- `POST /api/agent/chat/stream`：发起 Agent POST SSE。
+- `POST /api/agent/chat/stop`：停止当前身份拥有的运行。
+- `GET /api/agent/runs/{run_id}`：读取持久化运行状态和事件。
+- `GET /api/diag`、`GET /api/diag/anysearch`：管理员诊断。
+- `PATCH/POST/DELETE /api/skills/...`：管理员 Skill 管理。
+
+完整接口和后端运行细节见 [backend/README.md](backend/README.md)。
+
+## 测试与质量门禁
+
+```bash
+cd backend
+ruff check app tests
+mypy app
+pytest -q
+
+cd ../frontend
+pnpm lint
+pnpm build
+```
+
+当前基线：后端 153 个测试通过，Mypy strict 和 Ruff 通过；前端 ESLint、TypeScript 和 Vite 生产构建通过。
+
+## 部署
+
+- **后端**：`.github/workflows/deploy-backend-hf.yml` 调用 `deploy-to-hf.sh`，将后端和 `Skills/` 推送到 Hugging Face Docker Space。
+- **前端**：`.github/workflows/deploy-frontend.yml` 构建并发布 GitHub Pages。
+
+HF 后端至少应配置：
+
+```dotenv
+DATA_PILOT_ENV=production
+AUTH_SECRET=<稳定随机值>
+LLM_API_KEY=<secret>
+IWENCAI_API_KEY=<secret>
+CORS_ALLOW_ORIGINS=<前端 origin>
+```
+
+需要使用诊断或 Skill 管理接口时再配置 `ADMIN_API_KEY`。生产密钥应放入 HF Secrets，而不是仓库变量或前端构建变量。
+
+HF Space 必须将可读写持久卷挂载到 `/data`，否则 SQLite、历史、记忆和上传 Skill 会在重建后丢失。可通过管理员接口 `/api/diag` 检查 `data_dir_is_separate_mount`。
+
+## 当前边界
+
+- 没有批量 ETL、指标仓库、应用层查询缓存或向量数据库。
+- LangGraph 未配置 Checkpointer；断线恢复依赖自建的 `agent_runs` 事件记录。
+- 历史消息正文可以恢复，但前端目前不会重新水合历史工具轨迹。
+- SSE token 事件逐条写入 SQLite，长回答存在写放大，已列入路线图。
+- 数据库当前使用 `create_all()`，尚未引入版本化迁移。
+- 新上传 Python Skill 会被拒绝；持久卷中的旧代码 Skill 恢复路径仍需清理。
+
+## License
 
 Internal project. All rights reserved.

@@ -112,6 +112,12 @@ async def skill_router_node(state: AgentState) -> dict[str, Any]:
     """
     settings = get_settings()
     previous_results = state.get("tool_calls", [])
+    if state.get("reuse_prior_evidence"):
+        logger.info("router: presentation follow-up, synthesizing saved evidence")
+        return {
+            "router_action": "finish",
+            "reflection_verdict": "sufficient",
+        }
 
     # This is a hard *tool dispatch* cap, not a reflection cap. Successful
     # calls count too; otherwise a complex re-plan can make unbounded API

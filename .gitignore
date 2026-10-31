@@ -19,6 +19,7 @@ env/
 
 # Node
 node_modules/
+.pnpm-store/
 dist/
 .vite/
 .DS_Store

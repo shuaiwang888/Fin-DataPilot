@@ -147,6 +147,7 @@ async def run_agent_stream(
     memory_context: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events for a single user turn."""
+    from app.agent.followup import prepare_followup
     from app.agent.policy import assess_user_query
     from app.agent.state import (
         EV_REFLECTION,
@@ -168,6 +169,7 @@ async def run_agent_stream(
         return
 
     trace_id = generate_trace_id()
+    followup = prepare_followup(user_query, history)
     init_state: AgentState = {
         "user_query": user_query,
         "session_id": session_id,
@@ -179,7 +181,8 @@ async def run_agent_stream(
             "completed_steps": [],
             "tool_evidence": [],
         },
-        "tool_calls": [],
+        "tool_calls": list(followup["tool_calls"]),
+        "reuse_prior_evidence": bool(followup["reuse_prior_evidence"]),
         "skill_calls_used": 0,
         "reflection_verdict": "need_more",
         "trace_id": trace_id,
