@@ -139,6 +139,10 @@ git fetch --quiet --depth=1 "$HF_REMOTE" "$HF_BRANCH"
 git reset --mixed --quiet FETCH_HEAD
 
 git add -A
+if git diff --cached --quiet; then
+  echo "✓ Deployment tree is already current; no rebuild needed."
+  exit 0
+fi
 git commit -q -m "$MESSAGE"
 
 echo "▶ Pushing to $HF_REMOTE/$HF_BRANCH ..."
