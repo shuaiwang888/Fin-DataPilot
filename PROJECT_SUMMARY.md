@@ -681,7 +681,7 @@ Dependabot 每周检查 Python、npm 和 GitHub Actions 依赖。
 
 本次基于当前工作区实际执行：
 
-- 后端测试：`188 passed`
+- 后端测试：`194 passed`
 - Mypy：48 个后端源文件无问题
 - Ruff：通过
 - 前端 ESLint：通过

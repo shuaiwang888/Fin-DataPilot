@@ -164,7 +164,7 @@ Fin-DataPilot 面向自然语言金融研究场景：
 - `/data` 持久卷检测和管理员诊断接口已完成。
 - 前后端独立 GitHub Actions 部署。
 - CI 执行 Ruff、Mypy、Pytest、ESLint 和 Vite Build。
-- 当前后端测试基线：188 个用例。
+- 当前后端测试基线：194 个用例。
 
 ## 5. 当前未完成或仅占位的能力
 

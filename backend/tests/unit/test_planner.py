@@ -332,3 +332,24 @@ def test_substitute_walks_nested_dicts() -> None:
     out = _substitute_placeholders(args, prior)
     assert out["filter"]["name"] == "华勤技术"
     assert out["filter"]["code"] == "603296.SH"
+
+
+@pytest.mark.parametrize("query", [
+    "对比工商银行和建设银行最新市盈率，给两句结论和图表。",
+    "比较三家银行的股息率",
+    "宁德时代最新一期营业收入是多少",
+])
+@pytest.mark.parametrize("model_output", [
+    "malformed plan",
+    json.dumps({"plan": [{"goal": "检索市盈率", "target_skill": "anysearch", "args": {"action": "search", "query": "市盈率"}}]}),
+])
+async def test_metric_queries_keep_financial_first_for_invalid_or_web_only_plans(query, model_output):
+    from app.agent.skill_necessity import is_direct_financial_data_query
+
+    llm = AsyncMock()
+    llm.ainvoke = AsyncMock(return_value=type("R", (), {"content": model_output})())
+    with patch("app.agent.nodes.planner.build_chat_model", return_value=llm):
+        result = await planner_node({"user_query": query, "history": [], "tool_calls": []})
+    assert is_direct_financial_data_query(query)
+    assert result["plan"][0]["target_skill"] == "financial-query"
+    assert result["plan"][0]["args"]["query"] == query

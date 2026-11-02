@@ -38,7 +38,9 @@ _VERTICAL_SKILL_ORDER = (
 _DIRECT_FINANCIAL_DATA_MARKERS = (
     "股票", "股价", "行情", "市值", "涨停", "跌停", "涨幅", "跌幅",
     "成交", "换手", "资金流", "走势", "技术面", "基金", "指数", "可转债", "期货",
-    "营收", "净利润", "财务指标", "交易日", "开盘",
+    "营收", "营业收入", "净利润", "财务指标", "交易日", "开盘",
+    "市盈率", "市净率", "股息率", "分红率", "毛利率", "净利率",
+    "每股收益", "净资产收益率", "资产负债率", "现金流",
 )
 
 
@@ -108,10 +110,15 @@ def is_skill_necessary_for_query(user_query: str, skill: str) -> bool:
     return True
 
 
+def requests_financial_data(user_query: str) -> bool:
+    """Recognize financial metrics independently of news/analysis dimensions."""
+    q = (user_query or "").lower()
+    return any(marker.lower() in q for marker in _DIRECT_FINANCIAL_DATA_MARKERS)
+
+
 def is_direct_financial_data_query(user_query: str) -> bool:
     """Whether one or more structured financial lookups can answer the query."""
-    q = (user_query or "").lower()
-    if not any(marker.lower() in q for marker in _DIRECT_FINANCIAL_DATA_MARKERS):
+    if not requests_financial_data(user_query):
         return False
     if has_cross_source_analysis_intent(user_query):
         return False

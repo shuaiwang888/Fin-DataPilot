@@ -30,6 +30,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.agent.skill_necessity import (
     is_direct_financial_data_query,
     is_skill_necessary_for_query,
+    requests_financial_data,
     required_vertical_skills_for_query,
 )
 from app.agent.state import AgentState
@@ -432,6 +433,17 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     if not clean_plan:
         logger.warning("planner: every planned step was invalid, using research fallback")
         clean_plan = _fallback_research_plan(user_query)
+    if (
+        not prior_calls
+        and is_direct_financial_data_query(user_query)
+        and not any(step.get("target_skill") == "financial-query" for step in clean_plan)
+        and REGISTRY.get_spec("financial-query")
+        and REGISTRY.is_enabled("financial-query")
+    ):
+        # A valid JSON plan can still choose the wrong capability. Structured
+        # metrics go to their owning tool first; web fallback remains available
+        # after an empty/failed financial result on subsequent planning cycles.
+        clean_plan = _fallback_research_plan(user_query) + clean_plan
     clean_plan = _normalize_plan_for_query(user_query, clean_plan)
     if not clean_plan:
         logger.warning("planner: every planned step was unnecessary, using research fallback")
@@ -463,7 +475,7 @@ def _fallback_research_plan(user_query: str) -> list[dict[str, Any]]:
         "股票", "股价", "行情", "市值", "涨", "跌", "资金", "走势", "分析",
         "财报", "公告", "研报", "消息面", "基金", "债", "指数", "港股", "A股",
     )
-    if any(marker.lower() in q.lower() for marker in financial_markers) and (
+    if (requests_financial_data(q) or any(marker.lower() in q.lower() for marker in financial_markers)) and (
         REGISTRY.get_spec("financial-query") and REGISTRY.is_enabled("financial-query")
     ):
         financial_query = (
