@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from app.agent.events import PRIVATE_EVENTS, TRANSIENT_EVENTS, RunTranscript
 from app.agent.graph import run_agent_stream
 from app.agent.runtime import ACTIVE_RUNS
 from app.config import get_settings
@@ -64,6 +65,7 @@ async def _execute_run_background(
     history: list[dict[str, Any]],
     memory_context: str,
     event_queue: asyncio.Queue[dict[str, Any] | None],
+    subscriber_attached: asyncio.Event | None = None,
 ) -> None:
     """Own an Agent run independently from the transient SSE connection.
 
@@ -71,22 +73,20 @@ async def _execute_run_background(
     are flowing. Keeping execution here lets the browser recover the durable
     result through ``GET /runs/{run_id}`` without repeating paid tool calls.
     """
-    final_text = ""
-    tool_calls: list[dict[str, Any]] = []
+    transcript = RunTranscript()
     terminal_status = "completed"
     terminal_error: str | None = None
 
     async def publish(event: dict[str, Any]) -> None:
-        try:
-            await append_agent_run_event_async(run_id, event)
-        except Exception:  # noqa: BLE001
-            # A trace-write failure must not throw away an otherwise viable
-            # answer. The terminal run row is persisted separately below.
-            logger.exception("event persistence failed for run %s", run_id)
-        await event_queue.put(event)
+        if event.get("event") not in TRANSIENT_EVENTS:
+            try:
+                await append_agent_run_event_async(run_id, event)
+            except Exception:  # noqa: BLE001
+                logger.exception("event persistence failed for run %s", run_id)
+        if subscriber_attached is None or subscriber_attached.is_set():
+            await event_queue.put(event)
 
     async def collect() -> None:
-        nonlocal final_text
         async for item in run_agent_stream(
             user_query=query,
             history=history,
@@ -95,13 +95,12 @@ async def _execute_run_background(
             memory_context=memory_context,
         ):
             event_name = str(item.get("event", ""))
+            if event_name in PRIVATE_EVENTS:
+                continue
             event_data = item.get("data", {})
             event = {"event": event_name, "data": event_data}
+            transcript.collect(event)
             await publish(event)
-            if event_name == "tool_result":
-                tool_calls.append(event_data)
-            elif event_name == "message_final":
-                final_text = str(event_data.get("content", ""))
 
     try:
         await asyncio.wait_for(collect(), timeout=get_settings().agent_run_timeout_seconds)
@@ -119,14 +118,23 @@ async def _execute_run_background(
         await publish({"event": "error", "data": {"message": terminal_error}})
 
     try:
-        if final_text and terminal_status == "completed":
+        final_text = transcript.final_text
+        if terminal_status == "completed" and not final_text:
+            terminal_status = "failed"
+            terminal_error = transcript.error or "任务结束但未生成回答，请重试。"
+        if terminal_status != "completed":
+            final_text = final_text or ("本次研究已停止。" if terminal_status == "cancelled" else "本次研究未完成，请稍后重试。")
+            for call in transcript.tool_calls:
+                if "ok" not in call:
+                    call.update(ok=False, error="任务已结束，未收到工具结果。")
+        if final_text:
             try:
                 await save_message_async(
                     session_id=session_id,
                     role="assistant",
                     content=final_text,
-                    tool_calls=tool_calls or None,
-                    thinking={"trace": tool_calls},
+                    tool_calls=transcript.tool_calls or None,
+                    thinking={**transcript.metadata(), "status": terminal_status},
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("assistant message persistence failed for run %s", run_id)
@@ -203,6 +211,8 @@ async def chat_stream(
         yield _sse("ping", {"ts": time.time()})
 
         agent_q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        subscriber_attached = asyncio.Event()
+        subscriber_attached.set()
         runner_task: asyncio.Task[Any] = asyncio.create_task(
             _execute_run_background(
                 run_id=run_id,
@@ -212,6 +222,7 @@ async def chat_stream(
                 history=history,
                 memory_context=memory_context,
                 event_queue=agent_q,
+                subscriber_attached=subscriber_attached,
             )
         )
         await ACTIVE_RUNS.register(run_id, runner_task)
@@ -219,13 +230,14 @@ async def chat_stream(
         # This loop is only a subscriber. Losing the HTTP connection must not
         # cancel ``runner_task``; the frontend will recover its durable result.
         waiters: set[asyncio.Task[Any]] = set()
+        last_keepalive = time.monotonic()
         try:
             while True:
                 if await request.is_disconnected():
                     logger.info("SSE detached from run %s; background execution continues", run_id)
                     return
                 queue_wait = asyncio.create_task(agent_q.get())
-                keepalive_wait = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
+                keepalive_wait = asyncio.create_task(asyncio.sleep(max(0, SSE_KEEPALIVE_INTERVAL - (time.monotonic() - last_keepalive))))
                 disconnect_wait = asyncio.create_task(asyncio.sleep(1))
                 waiters = {queue_wait, keepalive_wait, disconnect_wait}
                 done, pending = await asyncio.wait(
@@ -244,9 +256,11 @@ async def chat_stream(
                         break
                     yield _sse(str(item.get("event", "")), item.get("data", {}), item.get("id"))
                 elif keepalive_wait in done:
+                    last_keepalive = time.monotonic()
                     yield _sse_keepalive()
                     yield _sse("heartbeat", {"ts": time.time(), "run_id": run_id})
         finally:
+            subscriber_attached.clear()
             for task in waiters:
                 task.cancel()
             for task in waiters:

@@ -12,18 +12,18 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: "#1c4534",
-          colorInfo: "#3d5270",
-          colorSuccess: "#1f6b45",
-          colorWarning: "#8d6230",
-          colorError: "#9b2c2c",
-          colorText: "#1a1814",
-          colorTextSecondary: "#6f675c",
-          colorBorder: "rgba(36, 28, 18, 0.16)",
-          colorBgLayout: "#f4efe6",
-          borderRadius: 2,
+          colorPrimary: "#087f73",
+          colorInfo: "#4069b4",
+          colorSuccess: "#12856f",
+          colorWarning: "#a46316",
+          colorError: "#be4b53",
+          colorText: "#18283e",
+          colorTextSecondary: "#63748a",
+          colorBorder: "#dce3ec",
+          colorBgLayout: "#f5f7fb",
+          borderRadius: 10,
           fontFamily: '"IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
-          boxShadowSecondary: "0 18px 40px rgba(28, 22, 12, 0.12)",
+          boxShadowSecondary: "0 18px 60px rgba(22, 43, 72, 0.12)",
         },
         components: {
           Button: {
@@ -31,10 +31,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             fontWeight: 600,
           },
           Drawer: {
-            colorBgElevated: "#f7f3eb",
+            colorBgElevated: "#ffffff",
           },
-          Modal: { borderRadiusLG: 2 },
-          Popover: { borderRadiusLG: 2 },
+          Modal: { borderRadiusLG: 16 },
+          Popover: { borderRadiusLG: 16 },
         },
       }}
     >

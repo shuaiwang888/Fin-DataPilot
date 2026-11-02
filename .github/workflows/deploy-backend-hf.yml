@@ -1,21 +1,25 @@
 name: Deploy Backend to HuggingFace Space
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Quality Gate"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "backend/**"
-      - "Skills/**"
-      - ".github/workflows/deploy-backend-hf.yml"
-      - "deploy-to-hf.sh"
   workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-hf
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { lfs: true }
+        with:
+          lfs: true
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # Write the SSH key from secrets to a file, then point git at it directly.
       # This avoids the webfactory/ssh-agent stdin-loading path that was failing
@@ -58,5 +62,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-          SHORT_SHA="${GITHUB_SHA:0:7}"
+          SOURCE_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          SHORT_SHA="${SOURCE_SHA:0:7}"
           ./deploy-to-hf.sh --message "ci: ${SHORT_SHA}"

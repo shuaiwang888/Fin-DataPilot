@@ -69,7 +69,7 @@ export const api = {
       body: JSON.stringify({ title }),
     }),
   getSession: (id: string, signal?: AbortSignal) =>
-    http<{ session: Session; messages: Message[] }>(`/api/sessions/${id}`, { signal }),
+    http<{ session: Session; messages: Message[]; active_run_id?: string | null }>(`/api/sessions/${id}`, { signal }),
   patchSession: (id: string, title: string) =>
     http<{ id: string; title: string }>(`/api/sessions/${id}`, {
       method: "PATCH",
@@ -98,7 +98,7 @@ export const api = {
 export interface AgentRun {
   id: string;
   session_id: string;
-  status: "running" | "completed" | "cancelled" | "failed";
+  status: "running" | "cancelling" | "completed" | "cancelled" | "failed";
   events: Array<{ event: string; data: Record<string, unknown> }>;
   final_text?: string | null;
   error?: string | null;

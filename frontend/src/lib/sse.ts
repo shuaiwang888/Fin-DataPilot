@@ -16,30 +16,27 @@ export async function* parseSSE(
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
 
-  while (true) {
-    if (signal?.aborted) {
-      try { await reader.cancel(); } catch { /* ignore */ }
-      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+  try {
+    while (true) {
+      if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+      const { value, done } = await reader.read();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      let index: number;
+      while ((index = buffer.indexOf("\n\n")) !== -1) {
+        const event = parseBlock(buffer.slice(0, index));
+        buffer = buffer.slice(index + 2);
+        if (event) yield event;
+      }
+      if (done) break;
     }
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    // SSE permits either LF or CRLF line endings. Normalizing lets the
-    // fetch-based parser work behind proxies that rewrite line endings.
-    buffer = buffer.replace(/\r\n/g, "\n");
-    let idx: number;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const raw = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const ev = parseBlock(raw);
-      if (ev) yield ev;
+    if (buffer.trim()) {
+      const event = parseBlock(buffer);
+      if (event) yield event;
     }
-  }
-  // flush any remaining
-  if (buffer.trim()) {
-    const ev = parseBlock(buffer);
-    if (ev) yield ev;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 
@@ -57,9 +54,10 @@ function parseBlock(block: string): AgentEvent | null {
   const dataStr = dataLines.join("\n");
   try {
     const data = JSON.parse(dataStr);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
     return { event, data } as AgentEvent;
   } catch {
-    return { event, data: { raw: dataStr } } as unknown as AgentEvent;
+    return null;
   }
 }
 

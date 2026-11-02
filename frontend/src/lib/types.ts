@@ -53,8 +53,40 @@ export interface AnswerPreamble {
   chunks_info: unknown;
 }
 
+export type ResearchPhase = "planning" | "researching" | "checking" | "summarizing" | "completed" | "failed" | "cancelled";
+
+export interface AnswerChart {
+  id: string;
+  type: "bar";
+  title: string;
+  unit: string;
+  points: Array<{ label: string; value: number }>;
+  source: string;
+  trace_id: string;
+  as_of?: string | null;
+  total_rows: number;
+}
+
+export interface AnswerPresentation {
+  version: 1;
+  status: "ready" | "partial" | "empty";
+  successful_tools: number;
+  total_tools: number;
+  warnings: string[];
+  charts: AnswerChart[];
+}
+
+export interface FinalAnswer {
+  content: string;
+  tool_calls: Array<Record<string, unknown>>;
+  preamble?: AnswerPreamble;
+  presentation?: AnswerPresentation;
+  citations?: Array<Record<string, unknown>>;
+}
+
 // SSE event types
 export type AgentEvent =
+  | { event: "phase"; data: { phase: ResearchPhase; label: string } }
   | { event: "run"; data: { run_id: string; session_id: string; status: string } }
   | { event: "run_status"; data: { run_id: string; status: string; error?: string | null } }
   | { event: "ping"; data: { ts: number } }
@@ -69,6 +101,7 @@ export type AgentEvent =
         ok: boolean;
         duration_ms: number;
         trace_id: string;
+        args?: Record<string, unknown>;
         result?: unknown;
         error?: string;
       };
@@ -82,7 +115,7 @@ export type AgentEvent =
   | { event: "heartbeat"; data: { ts: number; in_think?: boolean; pending_chars?: number; run_id?: string } }
   | {
       event: "message_final";
-      data: { content: string; tool_calls: unknown[]; preamble?: AnswerPreamble };
+      data: FinalAnswer;
     }
   | { event: "error"; data: { message: string } }
   | { event: "done"; data: { trace_id?: string } };

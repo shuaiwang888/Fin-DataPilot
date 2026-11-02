@@ -41,3 +41,8 @@ logs/
 
 # HF Space
 .hf/
+
+# Browser acceptance artifacts
+.playwright-cli/
+output/
+*.tsbuildinfo

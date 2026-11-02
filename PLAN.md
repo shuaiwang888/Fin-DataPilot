@@ -164,7 +164,7 @@ Fin-DataPilot 面向自然语言金融研究场景：
 - `/data` 持久卷检测和管理员诊断接口已完成。
 - 前后端独立 GitHub Actions 部署。
 - CI 执行 Ruff、Mypy、Pytest、ESLint 和 Vite Build。
-- 当前后端测试基线：153 个用例。
+- 当前后端测试基线：187 个用例。
 
 ## 5. 当前未完成或仅占位的能力
 
@@ -210,11 +210,11 @@ LLM 工厂有 `anthropic` 分支，但 requirements 没有 `langchain-anthropic`
 
 ### 6.1 SSE 写放大
 
-`append_agent_run_event_async()` 对每个事件执行读取、追加、截断、序列化和提交。大量 `token_delta` 会制造高频 SQLite 事务。
+已修复：`token_delta`、heartbeat 不进入持久化日志，只保存公开执行事件与最终答案。
 
 ### 6.2 订阅断开后的内存 Queue
 
-客户端断开后 Agent 继续执行，但后台 Task 仍向已经没有消费者的 Queue 投递事件，直到任务结束。
+已修复：客户端断开后停止投递实时事件，后台继续执行与持久化。
 
 ### 6.3 旧代码 Skill 恢复
 
@@ -251,10 +251,10 @@ LLM 工厂有 `anthropic` 分支，但 requirements 没有 `langchain-anthropic`
 
 ### P1：事件与运行系统
 
-- [ ] 将 token 事件在内存中合并后批量持久化。
-- [ ] 持久化阶段事件和最终文本，不逐 token 重写完整 JSON 数组。
-- [ ] 订阅断开后停止向 Queue 投递，只保留持久化。
-- [ ] 明确 `running/cancelling/cancelled/failed/completed` 前后端类型。
+- [x] token 仅实时传输，以最终正文恢复，避免逐 token 写入。
+- [x] 持久化阶段事件和最终文本，不逐 token 重写完整 JSON 数组。
+- [x] 订阅断开后停止向 Queue 投递，只保留持久化。
+- [x] 明确 `running/cancelling/cancelled/failed/completed` 前后端类型。
 - [ ] 评估 LangGraph SQLite/Postgres Checkpointer。
 
 验收标准：
@@ -265,7 +265,7 @@ LLM 工厂有 `anthropic` 分支，但 requirements 没有 `langchain-anthropic`
 
 ### P2：历史与可观测性
 
-- [ ] 从持久化消息恢复工具调用和思考轨迹。
+- [x] 从持久化消息恢复工具调用、公开执行轨迹与确定性图表。
 - [ ] 增加运行详情/trace 页面。
 - [ ] 接入 LangFuse 或 OpenTelemetry，并确保不记录密钥和敏感记忆。
 - [ ] 区分并展示“接口查询时间”和“数据业务时点”。

@@ -104,3 +104,20 @@ def test_diag_endpoint_reports_path(monkeypatch, tmp_path):
         assert "database_url" in body
         assert body["db_exists"] is False
         assert body["db_size_bytes"] == 0
+
+
+@pytest.mark.database
+async def test_active_run_lookup_is_owned_and_only_returns_in_progress_runs():
+    from app.storage.repository import (
+        create_agent_run_async,
+        create_session_async,
+        finish_agent_run_async,
+        get_active_run_id_async,
+    )
+
+    session = await create_session_async(title="恢复运行", user_id="owner")
+    run = await create_agent_run_async(session, "owner", "比较营收")
+    assert await get_active_run_id_async(session, "owner") == run
+    assert await get_active_run_id_async(session, "other") is None
+    await finish_agent_run_async(run, "completed", "结论")
+    assert await get_active_run_id_async(session, "owner") is None

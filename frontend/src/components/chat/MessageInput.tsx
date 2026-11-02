@@ -50,6 +50,9 @@ export function MessageInput({ disabled }: Props) {
           onCancel={streaming ? stop : undefined}
           placeholder="例如：对比宁德时代和阳光电源最近一个季度的营收与机构观点"
           loading={streaming}
+          actions={(_, { components: { SendButton, LoadingButton } }) => streaming
+            ? <LoadingButton aria-label="停止研究" title="停止研究" />
+            : <SendButton aria-label="发送研究问题" title="发送研究问题" />}
           disabled={disabled}
           autoSize={{ minRows: 1, maxRows: 6 }}
           className="fdp-sender"

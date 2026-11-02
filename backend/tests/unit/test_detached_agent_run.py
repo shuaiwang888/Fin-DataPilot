@@ -65,7 +65,9 @@ async def test_background_run_persists_final_answer_without_sse_subscriber(
         content="后台完成的答案",
         tool_calls=[{"name": "financial_data", "trace_id": "trace-1", "ok": True}],
         thinking={
-            "trace": [{"name": "financial_data", "trace_id": "trace-1", "ok": True}]
+            "trace": [{"name": "financial_data", "trace_id": "trace-1", "ok": True}],
+            "events": [],
+            "status": "completed"
         },
     )
     finish_run.assert_awaited_once_with("run-1", "completed", "后台完成的答案", None)
@@ -85,6 +87,7 @@ async def test_cancelled_background_run_reaches_durable_terminal_state(
 
     finish_run = AsyncMock()
     unregister = AsyncMock()
+    monkeypatch.setattr(agent, "save_message_async", AsyncMock())
     monkeypatch.setattr(agent, "run_agent_stream", slow_agent_stream)
     monkeypatch.setattr(agent, "finish_agent_run_async", finish_run)
     monkeypatch.setattr(agent.ACTIVE_RUNS, "unregister", unregister)
@@ -116,6 +119,57 @@ async def test_cancelled_background_run_reaches_durable_terminal_state(
     }
     assert await queue.get() is None
     finish_run.assert_awaited_once_with(
-        "run-cancelled", "cancelled", None, "run cancelled"
+        "run-cancelled", "cancelled", "本次研究已停止。", "run cancelled"
     )
     unregister.assert_awaited_once_with("run-cancelled")
+
+
+async def test_tokens_are_transient_and_final_presentation_is_durable(monkeypatch):
+    presentation = {"version": 1, "charts": [{"id": "c1"}]}
+    calls = [{"name": "financial-query", "args": {"query": "营收"}, "ok": True}]
+
+    async def stream(**_kwargs):
+        yield {"event": "phase", "data": {"phase": "researching"}}
+        yield {"event": "think_chunk", "data": {"text": "private reasoning"}}
+        for _ in range(100):
+            yield {"event": "token_delta", "data": {"text": "字"}}
+        yield {"event": "message_final", "data": {
+            "content": "完整结论", "tool_calls": calls, "presentation": presentation,
+        }}
+
+    append = AsyncMock()
+    save = AsyncMock()
+    monkeypatch.setattr(agent, "run_agent_stream", stream)
+    monkeypatch.setattr(agent, "append_agent_run_event_async", append)
+    monkeypatch.setattr(agent, "save_message_async", save)
+    monkeypatch.setattr(agent, "finish_agent_run_async", AsyncMock())
+    monkeypatch.setattr(agent, "update_memory_after_turn", AsyncMock())
+    queue = asyncio.Queue()
+    attached = asyncio.Event()  # Detached: events must not accumulate in the subscriber queue.
+    await agent._execute_run_background(
+        run_id="r1", session_id="s1", user_id="u1", query="营收", history=[],
+        memory_context="", event_queue=queue, subscriber_attached=attached,
+    )
+    assert append.await_count == 2
+    assert queue.qsize() == 2  # Only the terminal marker and sentinel.
+    saved = save.await_args.kwargs
+    assert saved["tool_calls"] == calls
+    assert saved["thinking"]["presentation"] == presentation
+    assert "private reasoning" not in str(saved)
+
+
+async def test_missing_final_answer_is_failed_not_completed(monkeypatch):
+    async def stream(**_kwargs):
+        yield {"event": "error", "data": {"message": "无法执行此请求"}}
+        yield {"event": "done", "data": {}}
+
+    finish = AsyncMock()
+    monkeypatch.setattr(agent, "run_agent_stream", stream)
+    monkeypatch.setattr(agent, "append_agent_run_event_async", AsyncMock())
+    monkeypatch.setattr(agent, "finish_agent_run_async", finish)
+    monkeypatch.setattr(agent, "save_message_async", AsyncMock())
+    await agent._execute_run_background(
+        run_id="r2", session_id="s1", user_id="u1", query="测试", history=[],
+        memory_context="", event_queue=asyncio.Queue(),
+    )
+    finish.assert_awaited_once_with("r2", "failed", "本次研究未完成，请稍后重试。", "无法执行此请求")

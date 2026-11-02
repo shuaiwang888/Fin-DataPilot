@@ -4,6 +4,8 @@ import type { ChatMessage } from "../../stores/chatStore";
 import { ThinkingPanel } from "./ThinkingPanel";
 import { ToolCallCard } from "./ToolCallCard";
 import { PreambleCard } from "./PreambleCard";
+import { AnswerVisuals } from "./AnswerVisuals";
+import { ResearchProgress } from "./ResearchProgress";
 import { FileTextOutlined, FormOutlined } from "@ant-design/icons";
 
 interface Props {
@@ -22,9 +24,10 @@ export const MessageBubble = memo(function MessageBubble({ msg }: Props) {
     <div className={`fdp-message-row ${isUser ? "is-user" : "is-assistant"}`}>
       <div className="fdp-message-author">
         <span className="fdp-message-avatar">{isUser ? <FormOutlined /> : <FileTextOutlined />}</span>
-        <div><strong>{isUser ? "研究问题" : "研究备忘"}</strong><span>{isUser ? "你的提问" : "只依据已取到的证据"}</span></div>
+        <div><strong>{isUser ? "你" : "Fin-DataPilot"}</strong><span>{isUser ? "研究问题" : "研究分析 · 来源可追溯"}</span></div>
       </div>
       <div className="fdp-message-body">
+        {!isUser && msg.phase && <ResearchProgress message={msg} />}
         {!isUser && msg.thinking && msg.thinking.length > 0 && (
           <ThinkingPanel steps={msg.thinking} />
         )}
@@ -32,6 +35,7 @@ export const MessageBubble = memo(function MessageBubble({ msg }: Props) {
           <ToolCallCard records={msg.toolCalls} />
         )}
         {!isUser && msg.preamble && <PreambleCard preamble={msg.preamble} />}
+        {!isUser && msg.presentation && <AnswerVisuals presentation={msg.presentation} />}
         <Bubble
           content={content}
           placement={isUser ? "end" : "start"}
@@ -39,6 +43,19 @@ export const MessageBubble = memo(function MessageBubble({ msg }: Props) {
           messageRender={!isUser ? (msg.streaming ? renderStreamingText : renderMarkdown) : undefined}
           className="fdp-message-bubble"
         />
+        {!isUser && msg.error && <p className="fdp-answer-error" role="alert">{msg.error}</p>}
+        {!isUser && !msg.streaming && msg.content && <div className="fdp-answer-actions">
+          <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("fdp:select-prompt", { detail: "把上一轮回答整理成三点关键结论，并保留来源和不确定性" }))}>提炼关键结论 ↗</button>
+          <button type="button" onClick={() => {
+            const blob = new Blob([msg.content], { type: "text/markdown;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "Fin-DataPilot-研究备忘.md";
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}>导出备忘 ↓</button>
+        </div>}
       </div>
     </div>
   );

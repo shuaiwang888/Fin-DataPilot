@@ -88,7 +88,10 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           chatSetSession(mostRecent.id);
           try {
             const detail = await api.getSession(mostRecent.id, ctrl.signal);
-            chatSetMessages(detail.messages);
+            if (useChatStore.getState().sessionId === mostRecent.id && !useChatStore.getState().streaming) {
+              chatSetMessages(detail.messages);
+              if (detail.active_run_id) useChatStore.getState()._resumeRun(detail.active_run_id);
+            }
           } catch (e) {
             if ((e as Error)?.name !== "AbortError") {
               /* non-fatal */
@@ -122,7 +125,10 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
     const ctrl = new AbortController();
     try {
       const r = await api.getSession(id, ctrl.signal);
-      chatSetMessages(r.messages);
+      if (useChatStore.getState().sessionId === id && !useChatStore.getState().streaming) {
+        chatSetMessages(r.messages);
+        if (r.active_run_id) useChatStore.getState()._resumeRun(r.active_run_id);
+      }
     } catch (e) {
       if ((e as Error)?.name !== "AbortError") {
         console.error(e);
@@ -168,7 +174,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
         <div className="fdp-brand-mark"><BankOutlined /></div>
         <div className="fdp-brand-name">
           <strong>Fin-DataPilot</strong>
-          <span>研究档案</span>
+          <span>金融研究工作空间</span>
         </div>
         <Button
           type="text"
@@ -187,11 +193,11 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           size="large"
           className="fdp-new-chat"
         >
-          新开研究
+          开始新研究
         </Button>
       </div>
       <div className="fdp-sidebar-section-head">
-        <span><ClockCircleOutlined /> 档案</span>
+        <span><ClockCircleOutlined /> 最近研究</span>
         <span className="fdp-session-count">{sessions.length}</span>
       </div>
       <div className="fdp-session-list">

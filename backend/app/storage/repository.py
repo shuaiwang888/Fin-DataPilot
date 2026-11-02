@@ -425,6 +425,19 @@ async def get_agent_run_for_user_async(run_id: str, user_id: str) -> dict[str, A
         }
 
 
+async def get_active_run_id_async(session_id: str, user_id: str) -> str | None:
+    """Find the newest owned in-progress run when reopening a conversation."""
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(AgentRun.id).where(
+                AgentRun.session_id == session_id,
+                AgentRun.user_id == user_id,
+                AgentRun.status.in_(["running", "cancelling"]),
+            ).order_by(AgentRun.created_at.desc()).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
 def list_messages(session_id: str) -> list[dict[str, Any]]:
     import asyncio
 

@@ -26,24 +26,27 @@ function asTable(data: unknown): { headers: string[]; rows: Array<Record<string,
     (Array.isArray(payload.articles) && payload.articles) ||
     (Array.isArray(payload.announcements) && payload.announcements) ||
     (Array.isArray(payload.reports) && payload.reports) ||
+    (Array.isArray(payload.rows) && payload.rows) ||
     null;
-  if (!arr || arr.length === 0 || typeof arr[0] !== "object") return null;
-  const headers = Object.keys(arr[0] as object);
-  return { headers, rows: arr as Array<Record<string, unknown>> };
+  if (!arr) return null;
+  const rows = arr.filter((row) => row && typeof row === "object" && !Array.isArray(row)) as Array<Record<string, unknown>>;
+  if (!rows.length) return null;
+  const headers = [...new Set(rows.flatMap(Object.keys))];
+  return { headers, rows };
 }
 
 export function ToolCallCard({ records }: Props) {
   if (!records || records.length === 0) return null;
   return (
-    <section className="fdp-evidence-stack" aria-label="Skill 执行记录">
-      <div className="fdp-evidence-stack-head">
-        <span>证据收集</span>
-        <small>{records.filter((record) => record.ok === true).length}/{records.length} 已完成</small>
-      </div>
+    <details className="fdp-evidence-stack" aria-label="工具执行记录">
+      <summary className="fdp-evidence-stack-head">
+        <span>查看工具记录 ↗</span>
+        <small>{records.filter((record) => record.ok === true).length} 成功 · {records.filter((record) => record.ok === false).length} 失败 · {records.filter((record) => record.ok === undefined).length} 进行中</small>
+      </summary>
       {records.map((r, i) => (
         <ToolCallItem key={`${r.trace_id}-${i}`} record={r} />
       ))}
-    </section>
+    </details>
   );
 }
 
@@ -64,7 +67,7 @@ function ToolCallItem({ record }: { record: ToolCallRecord }) {
           <strong>{record.name}</strong>
           <span>
             {record.trace_id ? `#${record.trace_id.slice(0, 8)}` : "金融数据能力"}
-            {record.duration_ms ? ` · ${record.duration_ms}ms` : ""}
+            {record.duration_ms !== undefined ? ` · ${(record.duration_ms / 1000).toFixed(1)}s` : ""}
           </span>
         </div>
         <span className="fdp-tool-status">
@@ -110,9 +113,9 @@ function ResultTable({
   const [asc, setAsc] = useState(true);
   const sorted = sortKey
     ? [...rows].sort((a, b) => {
-        const av = a[sortKey] ?? "";
-        const bv = b[sortKey] ?? "";
-        return (asc ? 1 : -1) * String(av).localeCompare(String(bv), "zh");
+        const av = String(a[sortKey] ?? "");
+        const bv = String(b[sortKey] ?? "");
+        return (asc ? 1 : -1) * av.localeCompare(bv, "zh", { numeric: true });
       })
     : rows;
   return (

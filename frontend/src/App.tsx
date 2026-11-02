@@ -79,8 +79,8 @@ export default function App() {
                 onClick={() => setSidebarOpen(true)}
               />
               <div className="fdp-toolbar-copy">
-                <span>{activeSession ? "当前备忘" : "新的研究"}</span>
-                <strong>{activeSession?.title || "尚未开始"}</strong>
+                <span>{activeSession ? "研究工作台 / 研究记录" : "FINANCIAL RESEARCH"}</span>
+                <strong>{activeSession?.title || "金融研究工作台"}</strong>
               </div>
             </div>
             <div className="fdp-toolbar-actions">

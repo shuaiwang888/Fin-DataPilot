@@ -224,6 +224,11 @@ async def run_agent_stream(
                 # Stream per-node events
                 if node_name == "planner":
                     plan = node_out.get("plan") or []
+                    yield {"event": "phase", "data": {"phase": "planning", "label": "拆解研究问题"}}
+                    yield {
+                        "event": "plan",
+                        "data": {"sub_tasks": [str(step.get("goal") or step.get("target_skill") or "整理结论") for step in plan]},
+                    }
                     steps = [
                         f"{s.get('target_skill') or 'final'} ({s.get('goal', '')[:40]})"
                         for s in plan
@@ -253,6 +258,7 @@ async def run_agent_stream(
                     tc = node_out.get("tool_calls") or []
                     if node_out.get("router_action") == "execute" and tc:
                         last = tc[-1]
+                        yield {"event": "phase", "data": {"phase": "researching", "label": "收集数据与来源"}}
                         yield {
                             "event": EV_TOOL_CALL,
                             "data": {
@@ -274,6 +280,7 @@ async def run_agent_stream(
                             "event": EV_TOOL_RESULT,
                             "data": {
                                 "name": last["name"],
+                                "args": last.get("args", {}),
                                 "ok": last.get("ok", False),
                                 "duration_ms": last.get("duration_ms", 0),
                                 "trace_id": last.get("trace_id", ""),
@@ -282,6 +289,7 @@ async def run_agent_stream(
                             },
                         }
                 elif node_name == "reflector":
+                    yield {"event": "phase", "data": {"phase": "checking", "label": "检查证据覆盖"}}
                     yield {
                         "event": EV_REFLECTION,
                         "data": {
@@ -299,6 +307,7 @@ async def run_agent_stream(
     # All exits, including router guards and failures, go through the one
     # synthesizer. This keeps user-facing content separate from execution
     # trace and ensures exactly one final-answer event per turn.
+    yield {"event": "phase", "data": {"phase": "summarizing", "label": "整理结论与图表"}}
     async for ev in synthesize(final_state):
         yield ev
 

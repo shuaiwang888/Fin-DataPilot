@@ -12,6 +12,7 @@ from app.storage.repository import (
     create_session_async,
     delete_all_sessions_async,
     delete_session_for_user_async,
+    get_active_run_id_async,
     get_session_for_user_async,
     list_messages_async,
     list_sessions_async,
@@ -58,7 +59,11 @@ async def get_session_detail(
     sess = await get_session_for_user_async(session_id, auth.user_id)
     if not sess:
         raise HTTPException(404, "Session not found")
-    return {"session": sess, "messages": await list_messages_async(session_id)}
+    return {
+        "session": sess,
+        "messages": await list_messages_async(session_id),
+        "active_run_id": await get_active_run_id_async(session_id, auth.user_id),
+    }
 
 
 @router.patch("/sessions/{session_id}")

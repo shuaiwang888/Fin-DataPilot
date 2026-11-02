@@ -12,6 +12,8 @@
 - **执行轨迹可见**：通过 SSE 展示计划、能力加载、工具调用、结果、反思和最终总结；不展示模型私有思维链。
 - **可恢复运行**：每次问题分配 `run_id`；SSE 断开后任务继续在后台执行，前端可轮询持久化结果。
 - **受控 Skill 管理**：普通用户只能查看和使用已发布能力；开关、调试、上传、删除只允许管理员操作。
+- **回答可视化**：从金融查询原始记录生成最多 3 个可切换的条形对比图，保留单位、负值、来源与查询时点；缺失或单位混杂的数据不画图。
+- **统一对话展示**：四阶段进度、研究计划、工具成功/失败统计、证据缺口和 Markdown 导出；刷新或重开会话可恢复已保存图表及工具记录，运行中会话自动继续同步。
 - **来源追踪**：工具结果包含来源、查询时点、引用、耗时和 trace ID。
 
 ## 实际架构
@@ -196,12 +198,15 @@ pytest -q
 
 cd ../frontend
 pnpm lint
+pnpm test
 pnpm build
 ```
 
-当前基线：后端 153 个测试通过，Mypy strict 和 Ruff 通过；前端 ESLint、TypeScript 和 Vite 生产构建通过。
+质量门禁包括后端 Pytest、Mypy strict、Ruff，以及前端 Vitest、ESLint、TypeScript 与 Vite 生产构建。
 
 ## 部署
+
+前后端部署都由成功完成的 `Quality Gate` 触发，并检出同一个已测试提交；也可手动运行。
 
 - **后端**：`.github/workflows/deploy-backend-hf.yml` 调用 `deploy-to-hf.sh`，将后端和 `Skills/` 推送到 Hugging Face Docker Space。
 - **前端**：`.github/workflows/deploy-frontend.yml` 构建并发布 GitHub Pages。
@@ -224,11 +229,21 @@ HF Space 必须将可读写持久卷挂载到 `/data`，否则 SQLite、历史�
 
 - 没有批量 ETL、指标仓库、应用层查询缓存或向量数据库。
 - LangGraph 未配置 Checkpointer；断线恢复依赖自建的 `agent_runs` 事件记录。
-- 历史消息正文可以恢复，但前端目前不会重新水合历史工具轨迹。
-- SSE token 事件逐条写入 SQLite，长回答存在写放大，已列入路线图。
+- 新版消息会保存并恢复执行事件、工具轨迹和图表；旧版没有保存的阶段/图表信息无法追溯补齐。
+- SSE token 只实时传输，阶段事件与最终答案持久化；断线恢复不重放未完成的逐字文本。
 - 数据库当前使用 `create_all()`，尚未引入版本化迁移。
 - 新上传 Python Skill 会被拒绝；持久卷中的旧代码 Skill 恢复路径仍需清理。
 
 ## License
 
 Internal project. All rights reserved.
+
+## 页面风格
+
+页面采用浅色画布、深蓝导航和青绿强调色，统一首页研究入口、对话卡片、进度、工具记录与图表。桌面与手机共用响应式布局，支持键盘焦点、减少动效和减少透明度偏好。
+
+## 对话与可视化契约
+
+`message_final` 是正文与图表的唯一最终事实源，包含 `content`、`tool_calls`、`preamble`、`citations` 和 `presentation`。`presentation` 使用版本 1，返回数据查询状态、成功/总调用数、证据缺口与 `charts`。图表只读取 `financial-query` 的结构化数值列，最多 3 个指标、每项前 12 条返回记录，不把证券代码当指标，不把查询时点冒充业务时点。
+
+前端的 `chatEvents.ts` 用同一 reducer 处理实时、轮询恢复和持久化历史。`phase` 表示规划、取数、覆盖检查、总结阶段，研究进度允许回到取数阶段补查；`run_status` 是可开始下一轮的持久化终态。点击停止取消任务，切换会话仅断开订阅。`GET /api/sessions/{id}` 额外返回当前身份的 `active_run_id`，供重新打开会话时继续同步。

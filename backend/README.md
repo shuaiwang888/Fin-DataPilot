@@ -252,7 +252,7 @@ mypy app
 pytest -q
 ```
 
-当前基线为 153 个 Pytest 用例，覆盖：
+Pytest 回归覆盖：
 
 - 身份和会话隔离
 - 记忆召回与删除
@@ -299,10 +299,22 @@ backend/
 
 - Agent 当前串行执行 Skill，未实现并行子图。
 - LangGraph 未配置 Checkpointer。
-- 每个 SSE 事件独立写入 SQLite，长回答存在写放大。
-- SSE 订阅断开后，后台 Task 仍向原 Queue 投递到任务结束。
-- 历史消息加载后，前端目前不会恢复 Tool/Thinking 轨迹。
+- SSE token/heartbeat 不写入 SQLite，只保存公开阶段事件与最终答案。
+- SSE 订阅断开后停止投递流式事件，后台执行和持久化继续。
+- 新版消息通过 thinking JSON 保存公开阶段事件、来源、图表与完整工具参数，供前端恢复；不保存私有推理。
 - 上传端点拒绝新代码 Skill，但启动恢复逻辑仍保留旧 `.py` Skill 导入路径，生产应清理。
 - `anysearch` 当前未加入上传模块的不可删除名称集合，管理员删除接口需增加保护。
 
 详细路线图见仓库根目录 `PLAN.md`。
+
+## 回答展示（v1）
+
+新增公开事件 `phase`（`planning/researching/checking/summarizing`）与可执行计划 `plan.sub_tasks`。`tool_result` 包含原始 `args`，`message_final.presentation` 包含：
+
+```json
+{"version":1,"status":"ready","successful_tools":1,"total_tools":1,"warnings":[],"charts":[]}
+```
+
+`status` 表示工具证据是否取得（`ready/partial/empty`），不是投资结论可信度评分。图表由 `app/agent/presentation.py` 确定性生成：只支持金融记录中同一指标、同一单位的条形对比，排除标识符、空值、非有限数值及重复标签。图表最多 3 个，每图前 12 条数据，标明实际返回总条数与查询时点。
+
+`RunTranscript` 收集公开执行元数据，`token_delta` 不进入持久化事件日志，最终正文保存在 `message_final` 和运行终态。没有最终答案的运行标记为失败。会话详情额外返回 `active_run_id`（可能为空），用于刷新/切换后继续轮询。
