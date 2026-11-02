@@ -12,7 +12,21 @@ from datetime import date
 from typing import Any
 
 FINANCIAL_ADVICE_TERMS = ("买入", "卖出", "推荐", "建仓", "加仓", "减仓", "止损", "目标价", "值得买", "该买吗")
-EXECUTION_TERMS = ("下单", "交易", "转账", "提现吗", "代买", "代卖")
+# Match requests to perform an action, rather than financial vocabulary.
+# In particular, “交易日/交易量/交易策略” are ordinary research concepts.
+_ACTION = r"(?:下单|挂单|撤单|转账|提现|代买|代卖|买入|卖出|建仓|加仓|减仓|清仓|申购|赎回|交易)"
+_MODIFIER = r"(?:请|帮我|替我|代我|为我|给我|立即|立刻|马上|现在|直接|自动|实际|执行|进行|发起|提交|确认|启动|取消|操作|一键|一下|一笔|一次|这笔|此笔|\s)*"
+_EXECUTION_PATTERNS = (
+    re.compile(r"(?:帮我|帮忙|替我|代我|为我|给我|请你|让你|麻烦你|请|立即|立刻|马上|现在|直接|自动|实际|执行|进行|发起|提交|确认|启动|取消)" + _MODIFIER + _ACTION),
+    re.compile(r"(?:^|[，,。；;！？!?\n]|然后|接着|并且|并)\s*" + _MODIFIER + _ACTION),
+    re.compile(r"(?:^|[，,。；;！？!?\n])\s*" + _MODIFIER + r"(?:把|将)[^，,。；;！？!?\n]{1,40}?(?:转给|转到|转入|转出)"),
+)
+_RESEARCH_SUFFIX = re.compile(
+    r"^(?:的)?(?:日|量|额|所|数据|记录|明细|统计|策略|模型|规则|制度|时间|时段|"
+    r"成本|费用|手续费|风险|建议|时机|信号|逻辑|理由|流程|步骤|原理|机制|失败|原因|条件|限制|示例|"
+    r"前|是什么|是什么意思|怎么|如何|是否|能否|吗|么|呢|后多久到账)"
+)
+_NEGATED_REQUEST = re.compile(r"(?:不要|不必|无需|不用|别|禁止|不是(?:让你)?)\s*$")
 LONG_WINDOW_TERMS = {
     "一年": 365,
     "半年": 180,
@@ -34,16 +48,33 @@ class PolicyDecision:
 
 def assess_user_query(query: str) -> PolicyDecision:
     text = query.lower()
-    if any(term in text for term in EXECUTION_TERMS):
+    if _requests_execution(text):
         return PolicyDecision(
             allowed=False,
             code="EXECUTION_NOT_SUPPORTED",
-            message="本系统仅提供研究与信息检索，不执行或代为执行任何交易、转账或账户操作。",
+            message="我可以帮你查询和分析相关数据，但不能替你实际下单、转账或操作账户。",
         )
     notices: list[str] = []
     if any(term in text for term in FINANCIAL_ADVICE_TERMS):
         notices.append("内容仅供研究参考，不构成个性化投资建议或交易指令；请结合自身风险承受能力独立判断。")
     return PolicyDecision(allowed=True, notices=tuple(notices))
+
+
+def _requests_execution(text: str) -> bool:
+    """Conservatively recognize explicit execution requests in each clause.
+
+    Read-only questions and negated requests are allowed. Negation is local
+    to a matched request: “不要解释，直接下单” still contains an action.
+    Actual capabilities remain restricted by the read-only tool registry.
+    """
+    for pattern in _EXECUTION_PATTERNS:
+        for match in pattern.finditer(text):
+            if _NEGATED_REQUEST.search(text[:match.start()]):
+                continue
+            if _RESEARCH_SUFFIX.match(text[match.end():].lstrip(" \t\n”\"’'」』")):
+                continue
+            return True
+    return False
 
 
 def assess_tool_call(name: str, args: dict[str, Any]) -> PolicyDecision:
