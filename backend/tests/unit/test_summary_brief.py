@@ -96,6 +96,7 @@ def test_same_vendor_endpoint_preserves_distinct_tool_queries():
 def test_valid_markdown_citation_is_not_misclassified_as_a_json_dump():
     assert not looks_like_raw_skill_dump("[S1] 公司资金指标与走势存在分化。")
     assert looks_like_raw_skill_dump('[{"title":"原始资讯"}]')
+    assert looks_like_raw_skill_dump("围绕「同花顺」检索到10条记录，下面只保留可读要点：\n资讯原文")
 
 
 def test_duplicate_paragraphs_are_removed_without_losing_distinct_facts():

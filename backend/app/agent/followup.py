@@ -118,6 +118,10 @@ def looks_like_raw_skill_dump(text: str) -> bool:
         return False
     if "以下是 Skill" in stripped and "```" in stripped:
         return True
+    if "检索到" in stripped and "下面只保留可读要点：" in stripped:
+        # Previous releases concatenated source excerpts as a fallback.
+        # Do not feed that legacy dump back as prose for a rewrite request.
+        return True
     if stripped.startswith(("```json", "```JSON", "{")):
         return True
     if re.match(r'^\[\s*(?:\{|"|\[)', stripped):
