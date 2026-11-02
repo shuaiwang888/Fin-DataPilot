@@ -76,7 +76,7 @@ async def test_summary_outage_retains_financial_values_and_marks_partial(monkeyp
     final = next(event["data"] for event in events if event["event"] == "message_final")
     assert "200" in final["content"] and "300" in final["content"]
     assert final["presentation"]["status"] == "partial"
-    assert "总结服务" in final["presentation"]["warnings"][0]
+    assert "自动总结" in final["presentation"]["warnings"][0]
     assert "provider unavailable" not in str(final)
 
 

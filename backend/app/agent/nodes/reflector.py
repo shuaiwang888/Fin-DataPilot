@@ -234,7 +234,7 @@ async def reflector_node(state: AgentState) -> dict[str, Any]:
     if required_vertical and required_vertical.issubset(completed_vertical):
         return {
             "reflection_verdict": "sufficient",
-            "reflection": "用户要求的结构化数据与非结构化金融证据均已覆盖",
+            "reflection": "用户要求的证据类型已检索；记录时效与缺失信息仍需在总结时核对",
         }
 
     # ---- Deterministic multi-step patterns ----

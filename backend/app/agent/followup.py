@@ -118,7 +118,11 @@ def looks_like_raw_skill_dump(text: str) -> bool:
         return False
     if "以下是 Skill" in stripped and "```" in stripped:
         return True
-    if stripped.startswith(("```json", "```JSON", "{", "[")):
+    if stripped.startswith(("```json", "```JSON", "{")):
+        return True
+    if re.match(r'^\[\s*(?:\{|"|\[)', stripped):
+        # A public answer may legitimately start with [S1]. It is not a
+        # serialized tool array and must not be replaced by a fallback.
         return True
     quotes = stripped.count('"')
     braces = stripped.count("{") + stripped.count("[")

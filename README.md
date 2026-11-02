@@ -126,7 +126,7 @@ pnpm dev
 8. Router 消费计划或 Reflector Hint，并替换前序结果占位符。
 9. Executor 通过 ToolRegistry 校验并调用 Skill，同时写入 `tool_runs` 审计表。
 10. Reflector 判断所有子目标是否覆盖；不足时补查或重新规划。
-11. Synthesizer 仅依据已有证据生成可读简报，不把 Skill 原始 JSON 当作答案；清理潜在 `<think>` 内容并附引用。用户要求改写上一轮回答时，沿用本会话已保存的证据，不再重新检索。
+11. Synthesizer 先对资料去重、过滤过期事件并压缩为关键事实，再仅依据这些证据生成可读简报，不把 Skill 原始 JSON 当作答案；清理潜在 `<think>` 内容并附引用。用户要求改写上一轮回答时，沿用本会话已保存的证据，不再重新检索。
 12. 保存 Assistant 消息和终态；SSE 断开时通过 `GET /api/agent/runs/{run_id}` 恢复结果。
 
 默认安全上限：
@@ -247,3 +247,9 @@ Internal project. All rights reserved.
 `message_final` 是正文与图表的唯一最终事实源，包含 `content`、`tool_calls`、`preamble`、`citations` 和 `presentation`。`presentation` 使用版本 1，返回数据查询状态、成功/总调用数、证据缺口与 `charts`。图表只读取 `financial-query` 的结构化数值列，最多 3 个指标、每项前 12 条返回记录，不把证券代码当指标，不把查询时点冒充业务时点。
 
 前端的 `chatEvents.ts` 用同一 reducer 处理实时、轮询恢复和持久化历史。`phase` 表示规划、取数、覆盖检查、总结阶段，研究进度允许回到取数阶段补查；`run_status` 是可开始下一轮的持久化终态。点击停止取消任务，切换会话仅断开订阅。`GET /api/sessions/{id}` 额外返回当前身份的 `active_run_id`，供重新打开会话时继续同步。
+
+## 研究总结的质量控制
+
+多来源公司分析先归纳结论，再按资金面、消息面、近期走势说明证据与边界。总结输入只保留去重后的少量资讯摘要及带日期的行情区间统计，不将资讯全文、重复财报报道或旧公告直接当作近期分析。研究正文通过输出检查后发送，原始结果仍可在工具记录中查看。
+
+总结为空、复制长段原文或生成被截断时，最多再尝试一次归纳；仍失败只展示短版关键事实并提示总结未完成。来源列表只附实际引用的记录。MiniMax-M3 的总结调用关闭可选 thinking，避免思考占用正文输出预算；不对不支持此选项的模型发送该参数。

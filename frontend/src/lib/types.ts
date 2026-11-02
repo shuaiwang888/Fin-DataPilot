@@ -82,6 +82,7 @@ export interface FinalAnswer {
   preamble?: AnswerPreamble;
   presentation?: AnswerPresentation;
   citations?: Array<Record<string, unknown>>;
+  summary_meta?: { attempts: number; mode: "model" | "fallback"; finish_reason: string };
 }
 
 // SSE event types

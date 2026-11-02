@@ -37,7 +37,7 @@ class RunTranscript:
             self.final_text = str(data.get("content") or "")
             if isinstance(data.get("tool_calls"), list):
                 self.tool_calls = data["tool_calls"]
-            self.answer = {key: data[key] for key in ("presentation", "preamble", "citations") if key in data}
+            self.answer = {key: data[key] for key in ("presentation", "preamble", "citations", "summary_meta") if key in data}
 
     def metadata(self) -> dict[str, Any]:
         return {"trace": self.tool_calls, "events": self.steps, **self.answer}
