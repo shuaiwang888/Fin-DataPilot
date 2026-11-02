@@ -78,3 +78,12 @@ async def test_summary_outage_retains_financial_values_and_marks_partial(monkeyp
     assert final["presentation"]["status"] == "partial"
     assert "总结服务" in final["presentation"]["warnings"][0]
     assert "provider unavailable" not in str(final)
+
+
+def test_requested_metric_takes_priority_over_vendor_default_columns():
+    call = financial([
+        {"名称": "甲", "最新价": 10, "涨跌幅": 1, "成交额": 20, "市盈率ttm": 8.08},
+        {"名称": "乙", "最新价": 11, "涨跌幅": 2, "成交额": 30, "市盈率ttm": 8.55},
+    ])
+    call["args"] = {"query": "比较两家公司最新市盈率"}
+    assert [chart["title"] for chart in build_presentation([call])["charts"]] == ["市盈率ttm"]

@@ -38,6 +38,7 @@ class AnswerPresentation(BaseModel):
 _IDENTIFIER = re.compile(r"代码|编码|序号|排名|日期|时间|code|(^|_)id$|rank|date|time", re.I)
 _LABEL = re.compile(r"简称|名称|名字|日期|name|label|date", re.I)
 _NUMBER = re.compile(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(%|亿|万|千|元|股|倍)?$")
+_METRICS = ("市盈率", "市净率", "股息率", "营业收入", "营收", "净利润", "市值", "涨跌幅", "成交额", "换手率", "净流入", "毛利率", "收益率")
 
 
 def _number(value: Any) -> tuple[float, str] | None:
@@ -80,7 +81,11 @@ def _charts(call: Mapping[str, Any], limit: int) -> list[AnswerChart]:
     if not all(names) or len(set(names)) != len(names):
         return []
     charts: list[AnswerChart] = []
-    for key in rows[0]:
+    query = str((call.get("args") or {}).get("query") or "")
+    preferred = [key for key in rows[0] if any(metric in query and metric in key for metric in _METRICS)]
+    # Vendors often prepend latest price/change columns to every response.
+    # When the user asked for a particular metric, visualise that evidence first.
+    for key in preferred or list(rows[0]):
         if key == label_key or _IDENTIFIER.search(key):
             continue
         values = [_number(row.get(key)) for row in selected]
