@@ -15,10 +15,10 @@ FINANCIAL_ADVICE_TERMS = ("买入", "卖出", "推荐", "建仓", "加仓", "减
 # Match requests to perform an action, rather than financial vocabulary.
 # In particular, “交易日/交易量/交易策略” are ordinary research concepts.
 _ACTION = r"(?:下单|挂单|撤单|转账|提现|代买|代卖|买入|卖出|建仓|加仓|减仓|清仓|申购|赎回|交易)"
-_MODIFIER = r"(?:请|帮我|替我|代我|为我|给我|立即|立刻|马上|现在|直接|自动|实际|执行|进行|发起|提交|确认|启动|取消|操作|一键|一下|一笔|一次|这笔|此笔|\s)*"
+_MODIFIER = r"(?:请|帮我|替我|代我|为我|给我|立即|立刻|马上|现在|直接|自动|实际|执行|进行|发起|提交|确认|启动|取消|操作|一键|一下|一笔|一次|这笔|此笔|\s){0,8}"
 _EXECUTION_PATTERNS = (
     re.compile(r"(?:帮我|帮忙|替我|代我|为我|给我|请你|让你|麻烦你|请|立即|立刻|马上|现在|直接|自动|实际|执行|进行|发起|提交|确认|启动|取消)" + _MODIFIER + _ACTION),
-    re.compile(r"(?:^|[，,。；;！？!?\n]|然后|接着|并且|并)\s*" + _MODIFIER + _ACTION),
+    re.compile(r"(?:^|[，,。；;！？!?\n]|然后|接着|并且|并)\s*" + _MODIFIER + _ACTION + r"(?=\s*(?:买入|卖出|\d|[一二三四五六七八九十百千万]))"),
     re.compile(r"(?:^|[，,。；;！？!?\n])\s*" + _MODIFIER + r"(?:把|将)[^，,。；;！？!?\n]{1,40}?(?:转给|转到|转入|转出)"),
 )
 _RESEARCH_SUFFIX = re.compile(
